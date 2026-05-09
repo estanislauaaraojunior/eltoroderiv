@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>🐂 ElToro Deriv</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header>
+    <div class="header-inner">
+      <h1>🐂 ElToro<span>Deriv</span></h1>
+      <div id="status-badge" class="badge badge-offline">Desconectado</div>
+    </div>
+  </header>
+
+  <main>
+    <!-- ── COLUNA ESQUERDA ── -->
+    <aside class="sidebar">
+
+      <!-- Configuração de Conexão -->
+      <section class="card" id="section-config">
+        <h2>⚙️ Configuração</h2>
+        <form id="form-config">
+          <label>
+            Token da API Deriv
+            <input type="password" id="input-token" placeholder="Cole aqui o seu API token" required />
+          </label>
+          <label>
+            App ID
+            <input type="text" id="input-appid" value="1089" placeholder="1089" />
+          </label>
+          <hr class="separator" />
+          <label>
+            Stake inicial (USD)
+            <input type="number" id="input-stake" value="1" min="0.35" step="0.01" />
+          </label>
+          <label>
+            Máx. de Gales
+            <input type="number" id="input-maxgales" value="1" min="0" max="10" step="1" />
+          </label>
+          <button type="submit" id="btn-connect" class="btn btn-primary">Conectar</button>
+          <button type="button" id="btn-disconnect" class="btn btn-secondary" disabled>Desconectar</button>
+        </form>
+      </section>
+
+      <!-- Info da Conta -->
+      <section class="card hidden" id="section-account">
+        <h2>👤 Conta</h2>
+        <div id="account-info">
+          <p><span class="label">Login ID:</span> <strong id="acc-loginid">—</strong></p>
+          <p><span class="label">Tipo:</span> <strong id="acc-type">—</strong></p>
+          <p><span class="label">Saldo:</span> <strong id="acc-balance">—</strong></p>
+        </div>
+        <div id="account-switch-section" class="hidden">
+          <hr class="separator" />
+          <p class="label">Trocar de Conta</p>
+          <select id="select-account"></select>
+          <label>
+            Token da Conta Selecionada
+            <input type="password" id="input-switch-token" placeholder="Token da conta" />
+          </label>
+          <button type="button" id="btn-switch" class="btn btn-secondary">Trocar</button>
+        </div>
+      </section>
+
+      <!-- Sinais -->
+      <section class="card">
+        <h2>📋 Sinais</h2>
+        <form id="form-signals">
+          <label>
+            Data das operações
+            <input type="date" id="input-date" />
+          </label>
+          <label>
+            Lista de Sinais
+            <textarea
+              id="input-signals"
+              rows="10"
+              placeholder="Cole aqui a lista de sinais:&#10;&#10;M5;USDJPY;15:05;CALL&#10;M5;USDJPY;15:25;PUT&#10;M5;EURUSD;16:00;CALL"
+            ></textarea>
+          </label>
+          <div class="btn-row">
+            <button type="submit" id="btn-schedule" class="btn btn-success" disabled>Agendar</button>
+            <button type="button" id="btn-cancel-all" class="btn btn-danger" disabled>Cancelar Tudo</button>
+          </div>
+        </form>
+      </section>
+
+    </aside>
+
+    <!-- ── COLUNA DIREITA ── -->
+    <div class="content">
+
+      <!-- Resumo -->
+      <section class="card stats-row">
+        <div class="stat">
+          <span class="stat-value" id="stat-total">0</span>
+          <span class="stat-label">Agendados</span>
+        </div>
+        <div class="stat">
+          <span class="stat-value green" id="stat-wins">0</span>
+          <span class="stat-label">Wins</span>
+        </div>
+        <div class="stat">
+          <span class="stat-value red" id="stat-losses">0</span>
+          <span class="stat-label">Losses</span>
+        </div>
+        <div class="stat">
+          <span class="stat-value" id="stat-profit">$0.00</span>
+          <span class="stat-label">Lucro / Prejuízo</span>
+        </div>
+      </section>
+
+      <!-- Log de Atividade -->
+      <section class="card">
+        <div class="card-header">
+          <h2>📡 Log de Atividade</h2>
+          <button type="button" id="btn-clear-log" class="btn btn-ghost">Limpar</button>
+        </div>
+        <div id="log" class="log-container"></div>
+      </section>
+
+      <!-- Tabela de Resultados -->
+      <section class="card">
+        <h2>📊 Resultados</h2>
+        <div class="table-wrapper">
+          <table id="results-table">
+            <thead>
+              <tr>
+                <th>Horário</th>
+                <th>Par</th>
+                <th>Direção</th>
+                <th>Duração</th>
+                <th>Stake</th>
+                <th>Gale</th>
+                <th>Resultado</th>
+                <th>Lucro</th>
+              </tr>
+            </thead>
+            <tbody id="results-body"></tbody>
+          </table>
+        </div>
+      </section>
+
+    </div>
+  </main>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

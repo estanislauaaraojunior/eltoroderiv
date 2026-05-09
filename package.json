@@ -1,0 +1,16 @@
+{
+  "name": "eltoro-deriv",
+  "version": "1.0.0",
+  "description": "Bot de entradas automáticas na Deriv via WebSocket API com painel web",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "socket.io": "^4.7.5",
+    "ws": "^8.17.1",
+    "date-fns": "^3.6.0"
+  }
+}
