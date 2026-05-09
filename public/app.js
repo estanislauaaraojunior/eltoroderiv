@@ -83,28 +83,34 @@ function setConnectedUI(connected) {
 // ── Formulário de Configuração ────────────────────────────────────────────────
 elFormConfig.addEventListener('submit', (e) => {
   e.preventDefault();
-  const token    = $('input-token').value.trim();
-  const appId    = $('input-appid').value.trim() || '1089';
-  const stake    = parseFloat($('input-stake').value) || 1;
-  const maxGales = parseInt($('input-maxgales').value, 10) || 0;
+  const token     = $('input-token').value.trim();
+  const appId     = $('input-appid').value.trim();
+  const accountId = ($('input-accountid')?.value || '').trim() || undefined;
+  const stake     = parseFloat($('input-stake').value) || 1;
+  const maxGales  = parseInt($('input-maxgales').value, 10) || 0;
 
   if (!token) return addLog('⚠️ Informe o Token da API.', 'warn');
+  if (!appId)  return addLog('⚠️ Informe o App ID.', 'warn');
 
   addLog('🔌 Conectando à Deriv...', 'muted');
-  socket.emit('config:connect', { token, appId, stake, maxGales });
+  socket.emit('config:connect', { token, appId, accountId, stake, maxGales });
 });
 
 elBtnDisconnect.addEventListener('click', () => {
-  socket.emit('config:connect', { token: '___INVALID___' }); // força reconexão limpa
+  socket.emit('config:disconnect');
   setConnectedUI(false);
   addLog('🔌 Desconectado.', 'muted');
 });
 
 // ── Trocar Conta ──────────────────────────────────────────────────────────────
 elBtnSwitch && elBtnSwitch.addEventListener('click', () => {
-  const token = $('input-switch-token').value.trim();
-  if (!token) return addLog('⚠️ Informe o token da conta destino.', 'warn');
-  socket.emit('account:switch', { token });
+  // Para nova API: usa o loginid (account_id) selecionado no select
+  // Para API legada: usa o token digitado no input
+  const selectedAccountId = elSelectAccount?.value?.trim();
+  const inputToken = $('input-switch-token')?.value?.trim();
+  const tokenOrId = selectedAccountId || inputToken;
+  if (!tokenOrId) return addLog('⚠️ Selecione ou informe a conta destino.', 'warn');
+  socket.emit('account:switch', { token: tokenOrId });
 });
 
 // ── Formulário de Sinais ──────────────────────────────────────────────────────

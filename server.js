@@ -35,46 +35,97 @@ io.on('connection', (socket) => {
 
   // ─── Conectar à Deriv ─────────────────────────────────────────────────────
 
-  socket.on('config:connect', async ({ token, appId, stake, maxGales }) => {
+  socket.on('config:connect', async ({ token, appId, accountId, stake, maxGales }) => {
     try {
       if (!token || typeof token !== 'string' || token.trim().length === 0) {
         return emit('error', { message: 'Token da API é obrigatório.' });
       }
+      if (!appId || typeof appId !== 'string' || appId.trim().length === 0) {
+        return emit('error', { message: 'App ID é obrigatório.' });
+      }
 
       // Desconecta sessão anterior se existir
       if (derivClient) {
-        scheduler.cancelAll();
+        scheduler.reset(); // cancela timers sem emitir (emit pode não estar inicializado)
+        galeManager.resetAll();
         derivClient.disconnect();
       }
 
-      derivClient = new DerivClient(appId || '1089');
-      await derivClient.connect();
+      derivClient = new DerivClient(appId.trim());
+      const isNewAPI = token.trim().startsWith('pat_');
 
-      const accountInfo = await derivClient.authorize(token.trim());
+      let accountInfo;
 
-      // Inicializa gale e scheduler
-      galeManager.init(stake || 1, maxGales || 0);
-      scheduler.init(derivClient, galeManager, emit);
+      if (isNewAPI) {
+        // ── Nova API: fluxo OTP ────────────────────────────────────────────
+        const { selectedAccount, accounts } = await derivClient.connectNewAPI(
+          token.trim(),
+          appId.trim(),
+          accountId?.trim() || undefined
+        );
+        accountInfo = derivClient.accountInfo;
 
-      // Busca saldo
-      const balance = await derivClient.getBalance();
+        // Inicializa gale e scheduler
+        galeManager.init(stake || 1, maxGales || 0);
+        scheduler.init(derivClient, galeManager, emit);
 
-      emit('connection:status', {
-        connected: true,
-        account: {
-          loginid: accountInfo.loginid,
-          fullname: accountInfo.fullname,
-          email: accountInfo.email,
-          currency: accountInfo.currency,
-          is_virtual: accountInfo.is_virtual,
-          accountList: derivClient.getAccountList(),
-        },
-        balance: {
-          amount: balance.balance,
-          currency: balance.currency,
-        },
-        message: `✅ Conectado como ${accountInfo.fullname || accountInfo.loginid} (${accountInfo.is_virtual ? 'Demo' : 'Real'})`,
-      });
+        // Saldo vem da lista de contas
+        const selAcc = accounts.find(a => a.account_id === selectedAccount.account_id);
+        const balanceAmount = parseFloat(selAcc?.balance ?? 0);
+        const currency = selAcc?.currency ?? 'USD';
+
+        emit('connection:status', {
+          connected: true,
+          account: {
+            loginid: accountInfo.loginid,
+            fullname: accountInfo.loginid,
+            email: '',
+            currency,
+            is_virtual: accountInfo.is_virtual,
+            accountList: accounts.map(a => ({
+              loginid: a.account_id,
+              currency: a.currency,
+              is_virtual: a.account_type === 'demo' ? 1 : 0,
+              token: a.account_id, // account_id serve de identificador para troca
+            })),
+          },
+          balance: {
+            amount: balanceAmount,
+            currency,
+          },
+          message: `✅ Conectado como ${accountInfo.loginid} (${accountInfo.is_virtual ? 'Demo' : 'Real'}) via nova API`,
+        });
+
+      } else {
+        // ── API Legada ─────────────────────────────────────────────────────
+        await derivClient.connect();
+        accountInfo = await derivClient.authorize(token.trim());
+
+        // Inicializa gale e scheduler
+        galeManager.init(stake || 1, maxGales || 0);
+        scheduler.init(derivClient, galeManager, emit);
+
+        // Busca saldo
+        const balance = await derivClient.getBalance();
+
+        emit('connection:status', {
+          connected: true,
+          account: {
+            loginid: accountInfo.loginid,
+            fullname: accountInfo.fullname,
+            email: accountInfo.email,
+            currency: accountInfo.currency,
+            is_virtual: accountInfo.is_virtual,
+            accountList: derivClient.getAccountList(),
+          },
+          balance: {
+            amount: balance.balance,
+            currency: balance.currency,
+          },
+          message: `✅ Conectado como ${accountInfo.fullname || accountInfo.loginid} (${accountInfo.is_virtual ? 'Demo' : 'Real'})`,
+        });
+      }
+
     } catch (err) {
       console.error('[config:connect] Erro:', err.message);
       emit('error', { message: `Erro ao conectar: ${err.message}` });
@@ -89,28 +140,39 @@ io.on('connection', (socket) => {
         return emit('error', { message: 'Não conectado à Deriv.' });
       }
       if (!token || typeof token !== 'string') {
-        return emit('error', { message: 'Token inválido.' });
+        return emit('error', { message: 'Token ou ID de conta inválido.' });
       }
 
       scheduler.cancelAll();
       galeManager.resetAll();
 
       const accountInfo = await derivClient.switchAccount(token.trim());
-      const balance = await derivClient.getBalance();
+
+      // Para a nova API, o saldo vem dos metadados da conta
+      let balanceAmount, currency;
+      if (derivClient.accountInfo?._patToken) {
+        const acc = derivClient.accountInfo._allAccounts.find(a => a.account_id === token.trim());
+        balanceAmount = parseFloat(acc?.balance ?? 0);
+        currency = acc?.currency ?? derivClient.accountInfo.currency;
+      } else {
+        const balance = await derivClient.getBalance();
+        balanceAmount = balance.balance;
+        currency = balance.currency;
+      }
 
       emit('connection:status', {
         connected: true,
         account: {
           loginid: accountInfo.loginid,
-          fullname: accountInfo.fullname,
-          email: accountInfo.email,
+          fullname: accountInfo.fullname || accountInfo.loginid,
+          email: accountInfo.email || '',
           currency: accountInfo.currency,
           is_virtual: accountInfo.is_virtual,
           accountList: derivClient.getAccountList(),
         },
         balance: {
-          amount: balance.balance,
-          currency: balance.currency,
+          amount: balanceAmount,
+          currency,
         },
         message: `🔄 Conta trocada para ${accountInfo.loginid} (${accountInfo.is_virtual ? 'Demo' : 'Real'})`,
       });
@@ -179,7 +241,19 @@ io.on('connection', (socket) => {
     galeManager.resetAll();
   });
 
-  // ─── Desconectar ──────────────────────────────────────────────────────────
+  // ─── Desconectar da Deriv (solicitado pelo usuário) ─────────────────────
+
+  socket.on('config:disconnect', () => {
+    scheduler.cancelAll();
+    galeManager.resetAll();
+    if (derivClient) {
+      derivClient.disconnect();
+      derivClient = null;
+    }
+    console.log(`[~] Sessão Deriv encerrada pelo usuário: ${socket.id}`);
+  });
+
+  // ─── Desconexão do Socket.io (browser fechado / aba recarregada) ──────────
 
   socket.on('disconnect', () => {
     console.log(`[-] Cliente desconectado: ${socket.id}`);

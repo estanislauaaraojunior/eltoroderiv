@@ -315,6 +315,61 @@ tr.loss td:nth-child(7) { color: var(--red);   font-weight: 700; }
 .profit-positive { color: var(--green); }
 .profit-negative { color: var(--red); }
 
+/* ── Texto de Ajuda ──────────────────────────────────────────────────────── */
+.help-text {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  line-height: 1.4;
+  margin-top: -4px;
+}
+
+.help-text a {
+  color: var(--blue);
+  text-decoration: none;
+}
+
+.help-text a:hover { text-decoration: underline; }
+
+.help-details {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  padding: 6px 10px;
+  margin-top: -2px;
+}
+
+.help-details summary {
+  cursor: pointer;
+  color: var(--blue);
+  font-weight: 500;
+  list-style: none;
+  user-select: none;
+}
+
+.help-details summary::-webkit-details-marker { display: none; }
+.help-details summary::before { content: '▶ '; font-size: 0.65rem; }
+.help-details[open] summary::before { content: '▼ '; }
+
+.help-steps {
+  margin: 8px 0 6px 16px;
+  line-height: 1.8;
+}
+
+.help-steps a {
+  color: var(--blue);
+  text-decoration: none;
+}
+
+.help-steps a:hover { text-decoration: underline; }
+
+.help-warn {
+  margin-top: 6px;
+  color: var(--yellow);
+  font-size: 0.73rem;
+}
+
 /* ── Utilitários ─────────────────────────────────────────────────────────── */
 .hidden { display: none !important; }
 .green  { color: var(--green); }

@@ -25,6 +25,17 @@ class Scheduler {
     this._emit = emit;
   }
 
+  /** Reseta o scheduler sem emitir eventos (usado em reconexão). */
+  reset() {
+    for (const [, handle] of this._timers) {
+      clearTimeout(handle);
+    }
+    this._timers.clear();
+    this._emit = null;
+    this._derivClient = null;
+    this._galeManager = null;
+  }
+
   /**
    * Agenda uma lista de sinais.
    * @param {Signal[]} signals Array parseado por signalParser
@@ -68,8 +79,11 @@ class Scheduler {
     for (const [, handle] of this._timers) {
       clearTimeout(handle);
     }
+    const hadPending = this._timers.size > 0;
     this._timers.clear();
-    this._emit('trades:cancelled', { message: '🛑 Todos os agendamentos foram cancelados.' });
+    if (this._emit && hadPending) {
+      this._emit('trades:cancelled', { message: '🛑 Todos os agendamentos foram cancelados.' });
+    }
   }
 
   /** Quantos sinais ainda estão na fila. */

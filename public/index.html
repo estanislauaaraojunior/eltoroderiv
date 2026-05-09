@@ -26,9 +26,32 @@
             Token da API Deriv
             <input type="password" id="input-token" placeholder="Cole aqui o seu API token" required />
           </label>
+          <details class="help-details">
+            <summary>Como gerar o token?</summary>
+            <p><strong>Nova API (developers.deriv.com)</strong> — tokens <code>pat_xxx</code>:</p>
+            <ol class="help-steps">
+              <li>Acesse <a href="https://developers.deriv.com" target="_blank" rel="noopener">developers.deriv.com</a> e faça login</li>
+              <li>Vá em <strong>Profile → API tokens</strong></li>
+              <li>Crie um token PAT com permissão <strong>Trade</strong></li>
+              <li>O token começa com <code>pat_</code> — copie e cole aqui</li>
+            </ol>
+            <p><strong>API Legada (legacy-api.deriv.com)</strong> — tokens <code>a1-xxx</code>:</p>
+            <ol class="help-steps">
+              <li>Acesse <a href="https://legacy-api.deriv.com" target="_blank" rel="noopener">legacy-api.deriv.com</a> e faça login</li>
+              <li>Crie um token com permissões <strong>Read</strong> e <strong>Trade</strong></li>
+              <li>O token começa com <code>a1-</code></li>
+            </ol>
+            <p class="help-warn">⚠️ Nunca compartilhe seu token com ninguém.</p>
+          </details>
           <label>
             App ID
-            <input type="text" id="input-appid" value="1089" placeholder="1089" />
+            <input type="text" id="input-appid" placeholder="App ID do seu app registrado" />
+            <small style="color:#888">Nova API (pat_): alphanumerico em developers.deriv.com · Legada (a1-): numérico em legacy-api.deriv.com</small>
+          </label>
+          <label>
+            ID da Conta <small style="color:#888">(opcional — nova API apenas)</small>
+            <input type="text" id="input-accountid" placeholder="Ex: DOT12345 ou DEM67890 (deixe em branco para auto)" />
+            <small style="color:#888">Deixe em branco para usar automaticamente a conta demo</small>
           </label>
           <hr class="separator" />
           <label>
@@ -56,9 +79,9 @@
           <hr class="separator" />
           <p class="label">Trocar de Conta</p>
           <select id="select-account"></select>
-          <label>
-            Token da Conta Selecionada
-            <input type="password" id="input-switch-token" placeholder="Token da conta" />
+          <label id="label-switch-token">
+            Token da Conta Selecionada <small>(só para API legada)</small>
+            <input type="password" id="input-switch-token" placeholder="Token da conta (deixe vazio para nova API)" />
           </label>
           <button type="button" id="btn-switch" class="btn btn-secondary">Trocar</button>
         </div>

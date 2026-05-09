@@ -2,21 +2,32 @@
 
 const WebSocket = require('ws');
 
-const DERIV_WS_URL = 'wss://ws.binaryws.com/websockets/v3';
+// ─── URLs da nova API (developers.deriv.com) ─────────────────────────────────
+const NEW_API_BASE_URL = 'https://api.derivws.com';
+const NEW_API_WS_PUBLIC = 'wss://api.derivws.com/trading/v1/options/ws/public';
+
+// ─── URL da API legada (legacy-api.deriv.com) ────────────────────────────────
+const LEGACY_WS_URL = 'wss://ws.derivws.com/websockets/v3';
+
 const DEFAULT_TIMEOUT_MS = 15_000;
 const PING_INTERVAL_MS = 25_000;
 
 /**
- * Wrapper da API WebSocket oficial da Deriv.
+ * Wrapper da API WebSocket da Deriv.
  *
- * Uso:
- *   const client = new DerivClient(appId);
+ * Suporta duas modalidades:
+ *  - Nova API (PAT token `pat_xxx` + alphanumeric App ID): usa fluxo OTP via REST
+ *  - API legada (token `a1-xxx` + App ID numérico): usa authorize via WebSocket
+ *
+ * Uso (nova API):
+ *   const client = new DerivClient();
+ *   const accounts = await client.connectNewAPI('pat_xxx', 'APP_ID', 'DOT12345');
+ *   const balance = await client.getBalance();
+ *
+ * Uso (API legada):
+ *   const client = new DerivClient('1089');
  *   await client.connect();
- *   const account = await client.authorize(token);
- *   const proposal = await client.proposal({ ... });
- *   const result = await client.buy(proposal.id, proposal.ask_price);
- *   await client.subscribeContractResult(contractId, cb);
- *   client.disconnect();
+ *   const account = await client.authorize('a1-xxx');
  */
 class DerivClient {
   constructor(appId = '1089') {
@@ -30,11 +41,153 @@ class DerivClient {
     this.accountInfo = null;
   }
 
-  // ─── Conexão ────────────────────────────────────────────────────────────────
+  // ─── Nova API: fluxo OTP ─────────────────────────────────────────────────
 
-  connect() {
+  /**
+   * Conecta usando a nova API (pat_ token + App ID alfanumérico).
+   * Automaticamente busca a lista de contas e seleciona a primeira correspondente.
+   *
+   * @param {string} patToken   Token PAT (começa com "pat_")
+   * @param {string} appId      App ID alfanumérico registrado em developers.deriv.com
+   * @param {string} [accountId] Opcional: ID da conta (ex: "DOT12345", "DEM67890", "ROT99999")
+   *                             Se omitido, usa a primeira conta demo disponível, ou real se não houver demo.
+   * @returns {Promise<{ accounts: Array, selectedAccount: object }>}
+   */
+  async connectNewAPI(patToken, appId, accountId) {
+    this.appId = appId;
+
+    // 1. Busca lista de contas
+    const accounts = await this._fetchAccounts(patToken, appId);
+    if (!accounts || accounts.length === 0) {
+      throw new Error('Nenhuma conta disponível para este token. Verifique as credenciais.');
+    }
+
+    // 2. Seleciona conta: prioriza a especificada, depois demo, depois real
+    let selected;
+    if (accountId) {
+      selected = accounts.find(a => a.account_id === accountId);
+      if (!selected) throw new Error(`Conta "${accountId}" não encontrada. Contas disponíveis: ${accounts.map(a => a.account_id).join(', ')}`);
+    } else {
+      selected = accounts.find(a => a.account_type === 'demo') || accounts[0];
+    }
+
+    // 3. Obtém URL WebSocket via OTP
+    const wsUrl = await this._getOTPUrl(patToken, appId, selected.account_id);
+
+    // 4. Conecta ao WebSocket usando a URL com OTP
+    await this._connectToUrl(wsUrl);
+
+    // 5. Popula accountInfo compatível com o restante do sistema
+    this._authorized = true;
+    this.accountInfo = {
+      loginid: selected.account_id,
+      fullname: selected.account_id,
+      email: '',
+      currency: selected.currency,
+      is_virtual: selected.account_type === 'demo' ? 1 : 0,
+      balance: parseFloat(selected.balance),
+      account_list: accounts.map(a => ({
+        loginid: a.account_id,
+        currency: a.currency,
+        is_virtual: a.account_type === 'demo' ? 1 : 0,
+        account_type: a.account_type,
+      })),
+      // Guarda dados originais para uso futuro
+      _patToken: patToken,
+      _appId: appId,
+      _allAccounts: accounts,
+    };
+
+    return { accounts, selectedAccount: selected };
+  }
+
+  /**
+   * Troca de conta usando a nova API.
+   * @param {string} accountId ID da conta a trocar (ex: "ROT90509620")
+   */
+  async switchAccountNewAPI(accountId) {
+    const info = this.accountInfo;
+    if (!info?._patToken) throw new Error('Não conectado via nova API');
+
+    const account = info._allAccounts.find(a => a.account_id === accountId);
+    if (!account) throw new Error(`Conta ${accountId} não encontrada`);
+
+    // Desconecta WebSocket atual
+    this._stopPing();
+    if (this._ws) {
+      this._ws.terminate();
+      this._ws = null;
+    }
+    this._authorized = false;
+    this._pending.clear();
+
+    // Obtém novo OTP e reconecta
+    const wsUrl = await this._getOTPUrl(info._patToken, info._appId, accountId);
+    await this._connectToUrl(wsUrl);
+
+    this._authorized = true;
+    this.accountInfo = {
+      ...this.accountInfo,
+      loginid: account.account_id,
+      fullname: account.account_id,
+      currency: account.currency,
+      is_virtual: account.account_type === 'demo' ? 1 : 0,
+      balance: parseFloat(account.balance),
+    };
+
+    return this.accountInfo;
+  }
+
+  /** @private Busca lista de contas da nova API */
+  async _fetchAccounts(patToken, appId) {
+    const res = await fetch(`${NEW_API_BASE_URL}/trading/v1/options/accounts`, {
+      headers: {
+        Authorization: `Bearer ${patToken}`,
+        'Deriv-App-ID': appId,
+      },
+      signal: AbortSignal.timeout(10_000),
+    });
+
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      const msg = body.errors?.[0]?.message || body.message || `HTTP ${res.status}`;
+      throw new Error(`Erro ao buscar contas: ${msg}`);
+    }
+
+    const body = await res.json();
+    return body.data;
+  }
+
+  /** @private Obtém URL WebSocket com OTP para uma conta */
+  async _getOTPUrl(patToken, appId, accountId) {
+    const res = await fetch(
+      `${NEW_API_BASE_URL}/trading/v1/options/accounts/${accountId}/otp`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${patToken}`,
+          'Deriv-App-ID': appId,
+          'Content-Type': 'application/json',
+        },
+        signal: AbortSignal.timeout(10_000),
+      }
+    );
+
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      const msg = body.errors?.[0]?.message || body.message || `HTTP ${res.status}`;
+      throw new Error(`Erro ao gerar OTP: ${msg}`);
+    }
+
+    const body = await res.json();
+    if (!body.data?.url) throw new Error('Resposta OTP inválida: URL ausente');
+    return body.data.url;
+  }
+
+  /** @private Conecta a uma URL WebSocket (usada tanto pela nova quanto pela legada) */
+  _connectToUrl(url) {
     return new Promise((resolve, reject) => {
-      const url = `${DERIV_WS_URL}?app_id=${this.appId}`;
+      console.log(`[WS] Conectando em: ${url.replace(/otp=[^&]+/, 'otp=***')}`);
       const ws = new WebSocket(url);
       this._ws = ws;
 
@@ -45,6 +198,7 @@ class DerivClient {
 
       ws.on('open', () => {
         clearTimeout(timer);
+        console.log('[WS] Conectado com sucesso.');
         this._startPing();
         resolve();
       });
@@ -59,7 +213,6 @@ class DerivClient {
       ws.on('close', (code, reason) => {
         this._stopPing();
         this._authorized = false;
-        // Rejeita todas as chamadas pendentes
         for (const [, pending] of this._pending) {
           clearTimeout(pending.timer);
           pending.reject(new Error(`WebSocket fechado (${code}): ${reason}`));
@@ -67,6 +220,13 @@ class DerivClient {
         this._pending.clear();
       });
     });
+  }
+
+  // ─── API Legada: conexão + autorização ──────────────────────────────────────
+
+  connect() {
+    const url = `${LEGACY_WS_URL}?app_id=${this.appId}`;
+    return this._connectToUrl(url);
   }
 
   disconnect() {
@@ -83,20 +243,25 @@ class DerivClient {
     return this._ws && this._ws.readyState === WebSocket.OPEN;
   }
 
-  // ─── Autenticação ───────────────────────────────────────────────────────────
+  // ─── Autenticação (API Legada) ───────────────────────────────────────────────
 
   async authorize(token) {
     const response = await this._send({ authorize: token });
-    if (response.error) throw new Error(response.error.message);
+    if (response.error) {
+      const err = response.error;
+      throw new Error(`[${err.code}] ${err.message}`);
+    }
 
     this._authorized = true;
     this.accountInfo = response.authorize;
     return response.authorize;
   }
 
+
+
   /**
-   * Lista as contas disponíveis (retornadas na resposta de authorize).
-   * Requer que authorize() já tenha sido chamado.
+   * Lista as contas disponíveis.
+   * Requer que authorize() ou connectNewAPI() já tenha sido chamado.
    */
   getAccountList() {
     if (!this.accountInfo) throw new Error('Cliente não autenticado');
@@ -104,11 +269,16 @@ class DerivClient {
   }
 
   /**
-   * Troca para outra conta (demo/real) usando o token correspondente.
-   * @param {string} token Token da conta alvo
+   * Troca para outra conta usando seu token (API legada) ou account_id (nova API).
+   * @param {string} tokenOrAccountId Token da conta (legada) ou account_id (nova API)
    */
-  async switchAccount(token) {
-    const response = await this._send({ authorize: token });
+  async switchAccount(tokenOrAccountId) {
+    // Nova API: recebe account_id (DOT/DEM/ROT + números)
+    if (this.accountInfo?._patToken || /^(DOT|DEM|ROT)\d+$/.test(tokenOrAccountId)) {
+      return this.switchAccountNewAPI(tokenOrAccountId);
+    }
+    // API Legada: recebe token
+    const response = await this._send({ authorize: tokenOrAccountId.trim() });
     if (response.error) throw new Error(response.error.message);
 
     this.accountInfo = response.authorize;
@@ -118,7 +288,10 @@ class DerivClient {
   // ─── Saldo ──────────────────────────────────────────────────────────────────
 
   async getBalance() {
-    const response = await this._send({ balance: 1, account: 'current' });
+    // A nova API não aceita o campo "account" — envia apenas {balance: 1}
+    const isNewAPI = !!this.accountInfo?._patToken;
+    const request = isNewAPI ? { balance: 1 } : { balance: 1, account: 'current' };
+    const response = await this._send(request);
     if (response.error) throw new Error(response.error.message);
     return response.balance;
   }
@@ -265,6 +438,11 @@ class DerivClient {
       msg = JSON.parse(raw);
     } catch {
       return;
+    }
+
+    // Log de debug — remova em produção
+    if (process.env.DERIV_DEBUG === '1') {
+      console.log('[WS ←]', JSON.stringify(msg));
     }
 
     // Roteamento por req_id (resposta a uma requisição pendente)
