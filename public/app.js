@@ -27,7 +27,16 @@ const elFormSignals    = $('form-signals');
 const elSectionAccount = $('section-account');
 const elLog            = $('log');
 const elResultsBody    = $('results-body');
+const elScheduleBody   = $('schedule-body');
 const elSelectAccount  = $('select-account');
+
+// Rastreia linhas da tabela de agendamentos por signalId
+const scheduleRows = new Map();
+
+// Dados para persistência
+const _resultRows   = [];
+const _scheduleData = [];
+const _logEntries   = [];
 
 // Inicializa campo de data com hoje
 const today = new Date();
@@ -41,6 +50,9 @@ function addLog(message, type = 'info') {
   entry.innerHTML = `<span class="log-time">${now}</span>${escapeHtml(message)}`;
   elLog.appendChild(entry);
   elLog.scrollTop = elLog.scrollHeight;
+  _logEntries.push({ time: now, message, type });
+  if (_logEntries.length > 200) _logEntries.shift();
+  saveLog();
 }
 
 function escapeHtml(str) {
@@ -52,6 +64,8 @@ function escapeHtml(str) {
 
 elBtnClearLog.addEventListener('click', () => {
   elLog.innerHTML = '';
+  _logEntries.length = 0;
+  saveLog();
 });
 
 // ── Estatísticas ──────────────────────────────────────────────────────────────
@@ -63,6 +77,7 @@ function updateStats() {
   const profitEl = $('stat-profit');
   profitEl.textContent = `$${Math.abs(state.totalProfit).toFixed(2)}`;
   profitEl.className = 'stat-value ' + (state.totalProfit >= 0 ? 'green' : 'red');
+  saveStats();
 }
 
 // ── Status de Conexão ─────────────────────────────────────────────────────────
@@ -79,7 +94,187 @@ function setConnectedUI(connected) {
     elSectionAccount.classList.add('hidden');
   }
 }
+// ── Tabela de Agendamentos ─────────────────────────────────────────────────────
+function statusBadge(status) {
+  const map = {
+    waiting:   { cls: 'status-waiting',   label: '⏳ Aguardando' },
+    executing: { cls: 'status-running',   label: '🚀 Executando' },
+    done:      { cls: 'status-done',      label: '✅ Concluído' },
+    cancelled: { cls: 'status-cancelled', label: '🛑 Cancelado' },
+    expired:   { cls: 'status-expired',   label: '⚠️ Expirado' },
+  };
+  const s = map[status] || map.waiting;
+  return `<span class="status-badge ${s.cls}">${s.label}</span>`;
+}
 
+function addScheduleRow(data) {
+  const { signal, expired, baseStake } = data;
+  const scheduledTime = new Date(signal.scheduledAt).toLocaleTimeString('pt-BR', {
+    hour: '2-digit', minute: '2-digit',
+  });
+  const dirClass = signal.direction === 'CALL' ? 'direction-call' : 'direction-put';
+  const status = expired ? 'expired' : 'waiting';
+  const stakeDisplay = `$${parseFloat(baseStake || 1).toFixed(2)}`;
+  const duration = `${signal.duration}${signal.duration_unit}`;
+
+  const tr = document.createElement('tr');
+  tr.innerHTML = `
+    <td>${scheduledTime}</td>
+    <td>${escapeHtml(signal.rawSymbol)}</td>
+    <td class="${dirClass}">${signal.direction === 'CALL' ? '⬆️ CALL' : '⬇️ PUT'}</td>
+    <td>${escapeHtml(duration)}</td>
+    <td>${escapeHtml(stakeDisplay)}</td>
+    <td id="sch-gale-${signal.id}">—</td>
+    <td id="sch-status-${signal.id}">${statusBadge(status)}</td>
+  `;
+  scheduleRows.set(signal.id, tr);
+  elScheduleBody.prepend(tr);
+
+  _scheduleData.unshift({
+    id: signal.id,
+    scheduledTime,
+    rawSymbol: signal.rawSymbol,
+    direction: signal.direction,
+    duration,
+    stake: stakeDisplay,
+    galeLabel: '—',
+    status,
+  });
+  saveSchedule();
+}
+
+function updateScheduleStatus(signalId, status, galeLabel) {
+  const statusEl = document.getElementById(`sch-status-${signalId}`);
+  if (statusEl) statusEl.innerHTML = statusBadge(status);
+  if (galeLabel !== undefined) {
+    const galeEl = document.getElementById(`sch-gale-${signalId}`);
+    if (galeEl) galeEl.textContent = galeLabel;
+  }
+  const entry = _scheduleData.find(d => d.id === signalId);
+  if (entry) {
+    entry.status = status;
+    if (galeLabel !== undefined) entry.galeLabel = galeLabel;
+  }
+  saveSchedule();
+}
+
+// ── localStorage ───────────────────────────────────────────────────────────
+const LS = {
+  FORM:     'eltoro_form',
+  STATS:    'eltoro_stats',
+  RESULTS:  'eltoro_results',
+  SCHEDULE: 'eltoro_schedule',
+  LOG:      'eltoro_log',
+};
+
+function saveForm() {
+  try {
+    localStorage.setItem(LS.FORM, JSON.stringify({
+      token:       $('input-token')?.value  || '',
+      appId:       $('input-appid')?.value  || '',
+      accountId:   $('input-accountid')?.value || '',
+      stake:       $('input-stake')?.value  || '1',
+      maxGales:    $('input-maxgales')?.value || '1',
+      signalsText: $('input-signals')?.value || '',
+      date:        $('input-date')?.value   || '',
+    }));
+  } catch (_) {}
+}
+
+function saveStats() {
+  try {
+    localStorage.setItem(LS.STATS, JSON.stringify({
+      wins:           state.wins,
+      losses:         state.losses,
+      totalProfit:    state.totalProfit,
+      totalScheduled: state.totalScheduled,
+    }));
+  } catch (_) {}
+}
+
+function saveResults() {
+  try {
+    localStorage.setItem(LS.RESULTS, JSON.stringify(_resultRows.slice(-200)));
+  } catch (_) {}
+}
+
+function saveSchedule() {
+  try {
+    localStorage.setItem(LS.SCHEDULE, JSON.stringify(_scheduleData.slice(0, 200)));
+  } catch (_) {}
+}
+
+function saveLog() {
+  try {
+    localStorage.setItem(LS.LOG, JSON.stringify(_logEntries.slice(-200)));
+  } catch (_) {}
+}
+
+function restoreState() {
+  try {
+    const form = JSON.parse(localStorage.getItem(LS.FORM) || 'null');
+    if (form) {
+      if (form.token)        $('input-token').value      = form.token;
+      if (form.appId)        $('input-appid').value      = form.appId;
+      if (form.accountId)    $('input-accountid').value  = form.accountId;
+      if (form.stake)        $('input-stake').value      = form.stake;
+      if (form.maxGales)     $('input-maxgales').value   = form.maxGales;
+      if (form.signalsText)  $('input-signals').value    = form.signalsText;
+      if (form.date)         $('input-date').value       = form.date;
+    }
+  } catch (_) {}
+
+  try {
+    const stats = JSON.parse(localStorage.getItem(LS.STATS) || 'null');
+    if (stats) {
+      state.wins           = stats.wins           || 0;
+      state.losses         = stats.losses         || 0;
+      state.totalProfit    = stats.totalProfit    || 0;
+      state.totalScheduled = stats.totalScheduled || 0;
+    }
+  } catch (_) {}
+
+  try {
+    const entries = JSON.parse(localStorage.getItem(LS.LOG) || '[]');
+    entries.forEach(({ time, message, type }) => {
+      const el = document.createElement('div');
+      el.className = `log-entry ${type}`;
+      el.innerHTML = `<span class="log-time">${escapeHtml(time)}</span>${escapeHtml(message)}`;
+      elLog.appendChild(el);
+      _logEntries.push({ time, message, type });
+    });
+    elLog.scrollTop = elLog.scrollHeight;
+  } catch (_) {}
+
+  try {
+    const results = JSON.parse(localStorage.getItem(LS.RESULTS) || '[]');
+    results.forEach(r => {
+      _resultRows.push(r);
+      _renderResultRow(r);
+    });
+  } catch (_) {}
+
+  try {
+    const schedule = JSON.parse(localStorage.getItem(LS.SCHEDULE) || '[]');
+    schedule.forEach(d => {
+      const status = (d.status === 'waiting' || d.status === 'executing') ? 'expired' : d.status;
+      const dirClass = d.direction === 'CALL' ? 'direction-call' : 'direction-put';
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td>${escapeHtml(d.scheduledTime)}</td>
+        <td>${escapeHtml(d.rawSymbol)}</td>
+        <td class="${dirClass}">${d.direction === 'CALL' ? '⬆️ CALL' : '⬇️ PUT'}</td>
+        <td>${escapeHtml(d.duration)}</td>
+        <td>${escapeHtml(d.stake)}</td>
+        <td id="sch-gale-${d.id}">${escapeHtml(d.galeLabel)}</td>
+        <td id="sch-status-${d.id}">${statusBadge(status)}</td>
+      `;
+      scheduleRows.set(d.id, tr);
+      elScheduleBody.appendChild(tr);
+      _scheduleData.push({ ...d, status });
+    });
+  } catch (_) {}
+}
 // ── Formulário de Configuração ────────────────────────────────────────────────
 elFormConfig.addEventListener('submit', (e) => {
   e.preventDefault();
@@ -144,6 +339,23 @@ elBtnCancelAll.addEventListener('click', () => {
 });
 
 // ── Tabela de Resultados ──────────────────────────────────────────────────────
+function _renderResultRow(r) {
+  const tr = document.createElement('tr');
+  tr.className = r.won ? 'win' : 'loss';
+  const profitClass = r.profit >= 0 ? 'profit-positive' : 'profit-negative';
+  const dirClass    = r.direction === 'CALL' ? 'direction-call' : 'direction-put';
+  tr.innerHTML =
+    `<td>${escapeHtml(r.scheduledTime)}</td>` +
+    `<td>${escapeHtml(r.rawSymbol)}</td>` +
+    `<td class="${dirClass}">${r.direction === 'CALL' ? '\u2b06\ufe0f CALL' : '\u2b07\ufe0f PUT'}</td>` +
+    `<td>${escapeHtml(r.duration)}</td>` +
+    `<td>$${parseFloat(r.stake).toFixed(2)}</td>` +
+    `<td>${r.galeRound > 0 ? 'G' + r.galeRound : '\u2014'}</td>` +
+    `<td>${r.won ? '\u2705 WIN' : '\u274c LOSS'}</td>` +
+    `<td class="${profitClass}">${r.profit >= 0 ? '+' : ''}$${parseFloat(r.profit).toFixed(2)}</td>`;
+  elResultsBody.prepend(tr);
+}
+
 function addResultRow({ signal, won, profit, stake, galeRound }) {
   const scheduledTime = new Date(signal.scheduledAt).toLocaleTimeString('pt-BR', {
     hour: '2-digit', minute: '2-digit',
@@ -167,8 +379,25 @@ function addResultRow({ signal, won, profit, stake, galeRound }) {
   `;
 
   elResultsBody.prepend(tr); // Mais recente no topo
-}
 
+  _resultRows.push({
+    scheduledTime,
+    rawSymbol:  signal.rawSymbol,
+    direction:  signal.direction,
+    duration:   signal.duration + signal.duration_unit,
+    stake,
+    galeRound,
+    won,
+    profit,
+  });
+  saveResults();
+}
+// ── Persistência de formulário ────────────────────────────────────────────
+['input-token', 'input-appid', 'input-accountid', 'input-stake', 'input-maxgales'].forEach(id => {
+  $(id)?.addEventListener('input', saveForm);
+});
+$('input-signals')?.addEventListener('input', saveForm);
+$('input-date')?.addEventListener('change', saveForm);
 // ── Eventos do Socket.io ──────────────────────────────────────────────────────
 
 // Conectado à Deriv
@@ -205,11 +434,14 @@ socket.on('signals:parsed', (data) => {
 // Trade agendado
 socket.on('trade:scheduled', (data) => {
   addLog(data.message, data.expired ? 'warn' : 'muted');
+  addScheduleRow(data);
 });
 
 // Trade em execução
 socket.on('trade:executing', (data) => {
   addLog(data.message, 'info');
+  const galeLabel = data.galeRound > 0 ? `G${data.galeRound}` : undefined;
+  updateScheduleStatus(data.signal.id, 'executing', galeLabel);
 });
 
 // Ordem aberta
@@ -234,6 +466,7 @@ socket.on('trade:result', (data) => {
     // Só conta como loss definitivo se não vai entrar em gale
   }
 
+  updateScheduleStatus(data.signal.id, 'done');
   addResultRow(data);
   updateStats();
 });
@@ -243,6 +476,7 @@ socket.on('trade:gale_limit', (data) => {
   state.losses++;
   updateStats();
   addLog(data.message, 'warn');
+  updateScheduleStatus(data.signal.id, 'done');
 });
 
 // Cancelamento
@@ -250,6 +484,14 @@ socket.on('trades:cancelled', (data) => {
   addLog(data.message, 'warn');
   state.totalScheduled = 0;
   updateStats();
+  _scheduleData.forEach(d => {
+    if (d.status === 'waiting' || d.status === 'executing') {
+      d.status = 'cancelled';
+      const statusEl = document.getElementById(`sch-status-${d.id}`);
+      if (statusEl) statusEl.innerHTML = statusBadge('cancelled');
+    }
+  });
+  saveSchedule();
 });
 
 // Erros gerais
@@ -260,9 +502,11 @@ socket.on('error', (data) => {
 // Erro em trade específico
 socket.on('trade:error', (data) => {
   addLog(data.message, 'error');
+  if (data.signal?.id) updateScheduleStatus(data.signal.id, 'expired');
 });
 
 // ── Inicialização ─────────────────────────────────────────────────────────────
+restoreState();
 setConnectedUI(false);
 updateStats();
 addLog('🐂 ElToroDeriv iniciado. Configure sua API token para começar.', 'muted');

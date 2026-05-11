@@ -53,6 +53,7 @@ class Scheduler {
           signal,
           message: `⚠️ Sinal expirado: ${signal.rawSymbol} ${signal.direction} às ${this._formatTime(signal.scheduledAt)}`,
           expired: true,
+          baseStake: this._galeManager.baseStake,
         });
         continue;
       }
@@ -63,6 +64,7 @@ class Scheduler {
         message: `📅 Agendado: ${signal.rawSymbol} ${signal.direction} às ${this._formatTime(signal.scheduledAt)} (em ${this._formatDelay(delay)})`,
         expired: false,
         scheduledAt: signal.scheduledAt.toISOString(),
+        baseStake: this._galeManager.baseStake,
       });
 
       const handle = setTimeout(() => {
@@ -79,10 +81,13 @@ class Scheduler {
     for (const [, handle] of this._timers) {
       clearTimeout(handle);
     }
-    const hadPending = this._timers.size > 0;
+    const pendingCount = this._timers.size;
     this._timers.clear();
-    if (this._emit && hadPending) {
-      this._emit('trades:cancelled', { message: '🛑 Todos os agendamentos foram cancelados.' });
+    if (this._emit) {
+      const msg = pendingCount > 0
+        ? `🛑 ${pendingCount} agendamento(s) cancelado(s).`
+        : '🛑 Nenhum agendamento pendente para cancelar.';
+      this._emit('trades:cancelled', { message: msg, pendingCount });
     }
   }
 
