@@ -92,6 +92,17 @@ elFormConfig.addEventListener('submit', (e) => {
   if (!token) return addLog('⚠️ Informe o Token da API.', 'warn');
   if (!appId)  return addLog('⚠️ Informe o App ID.', 'warn');
 
+  // Detecta combinação inválida: token pat_ com App ID numérico (legado)
+  const isNewToken = token.startsWith('pat_');
+  const isNumericAppId = /^\d+$/.test(appId);
+  if (isNewToken && isNumericAppId) {
+    return addLog(
+      '❌ App ID numérico ("' + appId + '") não funciona com token pat_. ' +
+      'Acesse developers.deriv.com, registre seu app e use o App ID alfanumérico gerado.',
+      'error'
+    );
+  }
+
   addLog('🔌 Conectando à Deriv...', 'muted');
   socket.emit('config:connect', { token, appId, accountId, stake, maxGales });
 });

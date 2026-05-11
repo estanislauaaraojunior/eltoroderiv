@@ -111,12 +111,14 @@ class Scheduler {
 
     try {
       // 1. Solicitar proposta
+      const currency = this._derivClient.accountInfo?.currency || 'USD';
       const proposalData = await this._derivClient.proposal({
         symbol: signal.symbol,
         contract_type: signal.contract_type,
         duration: signal.duration,
         duration_unit: signal.duration_unit,
         amount: stake,
+        currency,
       });
 
       // 2. Comprar

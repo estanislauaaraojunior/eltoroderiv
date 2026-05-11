@@ -56,6 +56,14 @@ class DerivClient {
   async connectNewAPI(patToken, appId, accountId) {
     this.appId = appId;
 
+    // Valida: App ID numérico pertence à API legada, não à nova API
+    if (/^\d+$/.test(appId.trim())) {
+      throw new Error(
+        `App ID "${appId}" é numérico (API legada). ` +
+        'Para usar token pat_, registre um App ID em developers.deriv.com e use o ID alfanumérico gerado.'
+      );
+    }
+
     // 1. Busca lista de contas
     const accounts = await this._fetchAccounts(patToken, appId);
     if (!accounts || accounts.length === 0) {
@@ -140,18 +148,24 @@ class DerivClient {
 
   /** @private Busca lista de contas da nova API */
   async _fetchAccounts(patToken, appId) {
-    const res = await fetch(`${NEW_API_BASE_URL}/trading/v1/options/accounts`, {
-      headers: {
-        Authorization: `Bearer ${patToken}`,
-        'Deriv-App-ID': appId,
-      },
-      signal: AbortSignal.timeout(10_000),
-    });
+    let res;
+    try {
+      res = await fetch(`${NEW_API_BASE_URL}/trading/v1/options/accounts`, {
+        headers: {
+          Authorization: `Bearer ${patToken}`,
+          'Deriv-App-ID': appId,
+        },
+        signal: AbortSignal.timeout(10_000),
+      });
+    } catch (err) {
+      const cause = err.cause?.message || err.cause?.code || err.message;
+      throw new Error(`Falha de rede ao buscar contas: ${cause}`);
+    }
 
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
       const msg = body.errors?.[0]?.message || body.message || `HTTP ${res.status}`;
-      throw new Error(`Erro ao buscar contas: ${msg}`);
+      throw new Error(`Erro ao buscar contas (${res.status}): ${msg}`);
     }
 
     const body = await res.json();
@@ -160,23 +174,29 @@ class DerivClient {
 
   /** @private Obtém URL WebSocket com OTP para uma conta */
   async _getOTPUrl(patToken, appId, accountId) {
-    const res = await fetch(
-      `${NEW_API_BASE_URL}/trading/v1/options/accounts/${accountId}/otp`,
-      {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${patToken}`,
-          'Deriv-App-ID': appId,
-          'Content-Type': 'application/json',
-        },
-        signal: AbortSignal.timeout(10_000),
-      }
-    );
+    let res;
+    try {
+      res = await fetch(
+        `${NEW_API_BASE_URL}/trading/v1/options/accounts/${accountId}/otp`,
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${patToken}`,
+            'Deriv-App-ID': appId,
+            'Content-Type': 'application/json',
+          },
+          signal: AbortSignal.timeout(10_000),
+        }
+      );
+    } catch (err) {
+      const cause = err.cause?.message || err.cause?.code || err.message;
+      throw new Error(`Falha de rede ao gerar OTP: ${cause}`);
+    }
 
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
       const msg = body.errors?.[0]?.message || body.message || `HTTP ${res.status}`;
-      throw new Error(`Erro ao gerar OTP: ${msg}`);
+      throw new Error(`Erro ao gerar OTP (${res.status}): ${msg}`);
     }
 
     const body = await res.json();
@@ -307,7 +327,7 @@ class DerivClient {
   async proposal(params) {
     const payload = {
       proposal: 1,
-      symbol: params.symbol,
+      underlying_symbol: params.symbol,
       contract_type: params.contract_type,
       duration: params.duration,
       duration_unit: params.duration_unit,
