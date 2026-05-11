@@ -184,15 +184,15 @@ io.on('connection', (socket) => {
 
   // ─── Submeter lista de sinais ─────────────────────────────────────────────
 
-  socket.on('signals:submit', ({ signalsText, date }) => {
+  socket.on('signals:submit', ({ signalsText, date, stake, maxGales }) => {
     try {
       if (!derivClient?.isConnected) {
         return emit('error', { message: 'Conecte-se à Deriv antes de agendar sinais.' });
       }
 
-      // Cancela qualquer agendamento anterior antes de criar novo
-      scheduler.cancelAll();
-      galeManager.resetAll();
+      // Atualiza stake/gale se fornecidos (sem cancelar agendamentos existentes)
+      if (stake != null) galeManager.baseStake = parseFloat(stake) || galeManager.baseStake;
+      if (maxGales != null) galeManager.maxGales = parseInt(maxGales, 10) >= 0 ? parseInt(maxGales, 10) : galeManager.maxGales;
 
       // Determina a data-base (usa a data enviada pelo cliente ou hoje)
       let baseDate;
@@ -239,6 +239,16 @@ io.on('connection', (socket) => {
   socket.on('trades:cancel', () => {
     scheduler.cancelAll();
     galeManager.resetAll();
+  });
+
+  // ─── Cancelar agendamento individual ─────────────────────────────────────
+
+  socket.on('signal:cancel', ({ signalId }) => {
+    if (!signalId || typeof signalId !== 'string') return;
+    const cancelled = scheduler.cancelSignal(signalId);
+    if (cancelled) {
+      emit('signal:cancelled', { signalId, message: `🛑 Agendamento cancelado.` });
+    }
   });
 
   // ─── Desconectar da Deriv (solicitado pelo usuário) ─────────────────────

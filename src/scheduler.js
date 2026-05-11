@@ -8,6 +8,8 @@ class Scheduler {
   constructor() {
     // Map<signalId, timeoutHandle>
     this._timers = new Map();
+    // Set de chaves compostas já agendadas (evita duplicatas)
+    this._scheduledKeys = new Set();
     this._emit = null;
     this._derivClient = null;
     this._galeManager = null;
@@ -31,6 +33,7 @@ class Scheduler {
       clearTimeout(handle);
     }
     this._timers.clear();
+    this._scheduledKeys.clear();
     this._emit = null;
     this._derivClient = null;
     this._galeManager = null;
@@ -44,6 +47,19 @@ class Scheduler {
     const now = Date.now();
 
     for (const signal of signals) {
+      // Chave composta para evitar reagendamento do mesmo sinal
+      const slotKey = `${signal.rawSymbol}_${signal.scheduledAt.getTime()}_${signal.direction}`;
+      if (this._scheduledKeys.has(slotKey)) {
+        this._emit('trade:scheduled', {
+          signal,
+          message: `⚠️ Sinal já agendado (ignorado): ${signal.rawSymbol} ${signal.direction} às ${this._formatTime(signal.scheduledAt)}`,
+          expired: false,
+          skipped: true,
+          baseStake: this._galeManager.baseStake,
+        });
+        continue;
+      }
+
       const delay = signal.scheduledAt.getTime() - now;
 
       if (delay <= 0) {
@@ -59,6 +75,7 @@ class Scheduler {
       }
 
       signal.status = 'scheduled';
+      this._scheduledKeys.add(slotKey);
       this._emit('trade:scheduled', {
         signal,
         message: `📅 Agendado: ${signal.rawSymbol} ${signal.direction} às ${this._formatTime(signal.scheduledAt)} (em ${this._formatDelay(delay)})`,
@@ -69,6 +86,7 @@ class Scheduler {
 
       const handle = setTimeout(() => {
         this._timers.delete(signal.id);
+        this._scheduledKeys.delete(slotKey);
         this._executeTrade(signal, this._galeManager.getStake(signal.id), 0);
       }, delay);
 
@@ -83,12 +101,26 @@ class Scheduler {
     }
     const pendingCount = this._timers.size;
     this._timers.clear();
+    this._scheduledKeys.clear();
     if (this._emit) {
       const msg = pendingCount > 0
         ? `🛑 ${pendingCount} agendamento(s) cancelado(s).`
         : '🛑 Nenhum agendamento pendente para cancelar.';
       this._emit('trades:cancelled', { message: msg, pendingCount });
     }
+  }
+
+  /**
+   * Cancela o agendamento de um sinal específico.
+   * @param {string} signalId
+   * @returns {boolean} true se o sinal existia e foi cancelado
+   */
+  cancelSignal(signalId) {
+    const handle = this._timers.get(signalId);
+    if (!handle) return false;
+    clearTimeout(handle);
+    this._timers.delete(signalId);
+    return true;
   }
 
   /** Quantos sinais ainda estão na fila. */
@@ -155,10 +187,15 @@ class Scheduler {
       const won = finalContract.profit >= 0;
       const profit = parseFloat(finalContract.profit);
 
+      // 4. Processar gale ANTES de emitir o resultado final
+      const galeDecision = this._galeManager.onResult(signal.id, won);
+      const isFinal = won || !galeDecision.shouldGale;
+
       this._emit('trade:result', {
         signal,
         won,
         profit,
+        isFinal,
         galeRound,
         stake,
         payout: parseFloat(finalContract.sell_price || 0),
@@ -166,9 +203,6 @@ class Scheduler {
           ? `🏆 WIN ${label}: ${signal.rawSymbol} | Lucro: $${Math.abs(profit).toFixed(2)}`
           : `❌ LOSS ${label}: ${signal.rawSymbol} | Prejuízo: -$${Math.abs(profit).toFixed(2)}`,
       });
-
-      // 4. Processar gale
-      const galeDecision = this._galeManager.onResult(signal.id, won);
 
       if (!won && galeDecision.shouldGale) {
         // Aguarda 1 segundo antes de entrar no gale

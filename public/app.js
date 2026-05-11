@@ -126,6 +126,7 @@ function addScheduleRow(data) {
     <td>${escapeHtml(stakeDisplay)}</td>
     <td id="sch-gale-${signal.id}">—</td>
     <td id="sch-status-${signal.id}">${statusBadge(status)}</td>
+    <td><button class="btn btn-ghost btn-cancel-signal" data-id="${signal.id}"${status === 'expired' ? ' disabled' : ''}>Cancelar</button></td>
   `;
   scheduleRows.set(signal.id, tr);
   elScheduleBody.prepend(tr);
@@ -150,11 +151,28 @@ function updateScheduleStatus(signalId, status, galeLabel) {
     const galeEl = document.getElementById(`sch-gale-${signalId}`);
     if (galeEl) galeEl.textContent = galeLabel;
   }
+  // Desabilita botão cancelar quando não está mais aguardando
+  if (status !== 'waiting') {
+    const tr = scheduleRows.get(signalId);
+    const btn = tr?.querySelector('.btn-cancel-signal');
+    if (btn) btn.disabled = true;
+  }
   const entry = _scheduleData.find(d => d.id === signalId);
   if (entry) {
     entry.status = status;
     if (galeLabel !== undefined) entry.galeLabel = galeLabel;
   }
+  saveSchedule();
+}
+
+function removeScheduleRow(signalId) {
+  const tr = scheduleRows.get(signalId);
+  if (tr) {
+    tr.remove();
+    scheduleRows.delete(signalId);
+  }
+  const idx = _scheduleData.findIndex(d => d.id === signalId);
+  if (idx !== -1) _scheduleData.splice(idx, 1);
   saveSchedule();
 }
 
@@ -268,6 +286,7 @@ function restoreState() {
         <td>${escapeHtml(d.stake)}</td>
         <td id="sch-gale-${d.id}">${escapeHtml(d.galeLabel)}</td>
         <td id="sch-status-${d.id}">${statusBadge(status)}</td>
+        <td><button class="btn btn-ghost btn-cancel-signal" data-id="${d.id}" disabled>Cancelar</button></td>
       `;
       scheduleRows.set(d.id, tr);
       elScheduleBody.appendChild(tr);
@@ -324,6 +343,8 @@ elFormSignals.addEventListener('submit', (e) => {
   e.preventDefault();
   const signalsText = $('input-signals').value.trim();
   const date        = $('input-date').value; // formato AAAA-MM-DD
+  const stake       = parseFloat($('input-stake').value) || 1;
+  const maxGales    = parseInt($('input-maxgales').value, 10) || 0;
 
   if (!signalsText) return addLog('⚠️ Cole os sinais antes de agendar.', 'warn');
 
@@ -331,11 +352,22 @@ elFormSignals.addEventListener('submit', (e) => {
   const [y, m, d] = date.split('-');
   const dateFormatted = `${d}/${m}/${y}`;
 
-  socket.emit('signals:submit', { signalsText, date: dateFormatted });
+  socket.emit('signals:submit', { signalsText, date: dateFormatted, stake, maxGales });
 });
 
 elBtnCancelAll.addEventListener('click', () => {
   socket.emit('trades:cancel');
+});
+
+// Cancelamento individual de agendamento (event delegation)
+elScheduleBody.addEventListener('click', (e) => {
+  const btn = e.target.closest('.btn-cancel-signal');
+  if (!btn) return;
+  const signalId = btn.dataset.id;
+  if (signalId) {
+    btn.disabled = true;
+    socket.emit('signal:cancel', { signalId });
+  }
 });
 
 // ── Tabela de Resultados ──────────────────────────────────────────────────────
@@ -459,24 +491,28 @@ socket.on('trade:result', (data) => {
   const type = data.won ? 'success' : 'error';
   addLog(data.message, type);
 
+  if (!data.isFinal) {
+    // Resultado intermediário de gale — apenas loga; aguarda o resultado final
+    return;
+  }
+
+  // Resultado final (WIN, ou LOSS sem mais gales)
   if (data.won) {
     state.wins++;
     state.totalProfit += data.profit;
   } else {
-    // Só conta como loss definitivo se não vai entrar em gale
+    state.losses++;
+    state.totalProfit += data.profit; // profit é negativo para perdas
   }
 
-  updateScheduleStatus(data.signal.id, 'done');
+  removeScheduleRow(data.signal.id);
   addResultRow(data);
   updateStats();
 });
 
 // Limite de gale atingido
 socket.on('trade:gale_limit', (data) => {
-  state.losses++;
-  updateStats();
   addLog(data.message, 'warn');
-  updateScheduleStatus(data.signal.id, 'done');
 });
 
 // Cancelamento
@@ -489,9 +525,18 @@ socket.on('trades:cancelled', (data) => {
       d.status = 'cancelled';
       const statusEl = document.getElementById(`sch-status-${d.id}`);
       if (statusEl) statusEl.innerHTML = statusBadge('cancelled');
+      const tr = scheduleRows.get(d.id);
+      const btn = tr?.querySelector('.btn-cancel-signal');
+      if (btn) btn.disabled = true;
     }
   });
   saveSchedule();
+});
+
+// Cancelamento individual confirmado
+socket.on('signal:cancelled', (data) => {
+  updateScheduleStatus(data.signalId, 'cancelled');
+  addLog(`🛑 Sinal cancelado individualmente.`, 'warn');
 });
 
 // Erros gerais
