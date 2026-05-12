@@ -29,6 +29,24 @@ io.on('connection', (socket) => {
   let derivClient = null;
   const galeManager = new GaleManager();
   const scheduler = new Scheduler();
+  let healthCheckTimer = null;
+
+  /** Inicia o health check periódico da API (a cada 30s) */
+  function startHealthCheck() {
+    if (healthCheckTimer) clearInterval(healthCheckTimer);
+    healthCheckTimer = setInterval(async () => {
+      if (!derivClient?.isConnected) return;
+      try {
+        const ok = await derivClient.ping(5_000);
+        emit('api:health', {
+          ok,
+          message: ok ? 'API respondendo normalmente' : 'API não respondeu ao ping',
+        });
+      } catch (err) {
+        emit('api:health', { ok: false, message: err.message });
+      }
+    }, 30_000);
+  }
 
   /** Utilitário: emite evento ao socket que iniciou a ação */
   const emit = (event, data) => socket.emit(event, data);
@@ -96,6 +114,8 @@ io.on('connection', (socket) => {
           message: `✅ Conectado como ${accountInfo.loginid} (${accountInfo.is_virtual ? 'Demo' : 'Real'}) via nova API`,
         });
 
+        startHealthCheck();
+
       } else {
         // ── API Legada ─────────────────────────────────────────────────────
         await derivClient.connect();
@@ -124,6 +144,8 @@ io.on('connection', (socket) => {
           },
           message: `✅ Conectado como ${accountInfo.fullname || accountInfo.loginid} (${accountInfo.is_virtual ? 'Demo' : 'Real'})`,
         });
+
+        startHealthCheck();
       }
 
     } catch (err) {
@@ -256,6 +278,7 @@ io.on('connection', (socket) => {
   socket.on('config:disconnect', () => {
     scheduler.cancelAll();
     galeManager.resetAll();
+    if (healthCheckTimer) { clearInterval(healthCheckTimer); healthCheckTimer = null; }
     if (derivClient) {
       derivClient.disconnect();
       derivClient = null;
@@ -267,6 +290,10 @@ io.on('connection', (socket) => {
 
   socket.on('disconnect', () => {
     console.log(`[-] Cliente desconectado: ${socket.id}`);
+    if (healthCheckTimer) {
+      clearInterval(healthCheckTimer);
+      healthCheckTimer = null;
+    }
     scheduler.cancelAll();
     if (derivClient) {
       derivClient.disconnect();

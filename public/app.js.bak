@@ -15,24 +15,22 @@ const state = {
 // ── Elementos ─────────────────────────────────────────────────────────────────
 const $ = (id) => document.getElementById(id);
 
-const elStatusBadge      = $('status-badge');
-const elApiHealthBadge   = $('api-health-badge');
-const elBtnConnect       = $('btn-connect');
-const elBtnDisconnect    = $('btn-disconnect');
-const elBtnSchedule      = $('btn-schedule');
-const elBtnCancelAll     = $('btn-cancel-all');
-const elBtnClearLog      = $('btn-clear-log');
-const elBtnClearSignals  = $('btn-clear-signals');
-const elBtnSwitch        = $('btn-switch');
-const elFormConfig       = $('form-config');
-const elFormSignals      = $('form-signals');
-const elSectionAccount   = $('section-account');
-const elLog              = $('log');
-const elResultsBody      = $('results-body');
-const elScheduleBody     = $('schedule-body');
-const elSelectAccount    = $('select-account');
+const elStatusBadge    = $('status-badge');
+const elBtnConnect     = $('btn-connect');
+const elBtnDisconnect  = $('btn-disconnect');
+const elBtnSchedule    = $('btn-schedule');
+const elBtnCancelAll   = $('btn-cancel-all');
+const elBtnClearLog    = $('btn-clear-log');
+const elBtnSwitch      = $('btn-switch');
+const elFormConfig     = $('form-config');
+const elFormSignals    = $('form-signals');
+const elSectionAccount = $('section-account');
+const elLog            = $('log');
+const elResultsBody    = $('results-body');
+const elScheduleBody   = $('schedule-body');
+const elSelectAccount  = $('select-account');
 
-// Rastreia elementos de linha da tabela de agendamentos por signalId
+// Rastreia linhas da tabela de agendamentos por signalId
 const scheduleRows = new Map();
 
 // Dados para persistência
@@ -40,66 +38,9 @@ const _resultRows   = [];
 const _scheduleData = [];
 const _logEntries   = [];
 
-// Paginação – agendamentos
-const schedPagination = { page: 0, perPage: 75 };
-
-// Ordenação
-const schedSort   = { dir: null }; // null | 'asc' | 'desc'
-const resultsSort = { dir: null };
-
-// Filtros
-const schedFilters   = {};
-const resultsFilters = {};
-
 // Inicializa campo de data com hoje
 const today = new Date();
 $('input-date').value = today.toISOString().slice(0, 10);
-
-// ── AudioContext para sons ─────────────────────────────────────────────────────
-let _audioCtx = null;
-
-function _getAudioCtx() {
-  if (!_audioCtx) _audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-  return _audioCtx;
-}
-
-function playSound(type) {
-  try {
-    const ctx = _getAudioCtx();
-    if (ctx.state === 'suspended') ctx.resume();
-    const now = ctx.currentTime;
-
-    if (type === 'win') {
-      [[660, 0, 0.15], [880, 0.18, 0.15], [1046, 0.36, 0.2]].forEach(([freq, offset, dur]) => {
-        const osc = ctx.createOscillator();
-        const gain = ctx.createGain();
-        osc.connect(gain);
-        gain.connect(ctx.destination);
-        osc.type = 'sine';
-        osc.frequency.setValueAtTime(freq, now + offset);
-        gain.gain.setValueAtTime(0.35, now + offset);
-        gain.gain.exponentialRampToValueAtTime(0.001, now + offset + dur);
-        osc.start(now + offset);
-        osc.stop(now + offset + dur + 0.05);
-      });
-    } else {
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.connect(gain);
-      gain.connect(ctx.destination);
-      osc.type = 'sawtooth';
-      osc.frequency.setValueAtTime(400, now);
-      osc.frequency.linearRampToValueAtTime(180, now + 0.5);
-      gain.gain.setValueAtTime(0.3, now);
-      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.5);
-      osc.start(now);
-      osc.stop(now + 0.55);
-    }
-  } catch (_) {}
-}
-
-// Inicializa AudioContext na primeira interação do usuário
-document.addEventListener('click', () => { try { _getAudioCtx(); } catch (_) {} }, { once: true });
 
 // ── Funções de Log ─────────────────────────────────────────────────────────────
 function addLog(message, type = 'info') {
@@ -127,11 +68,6 @@ elBtnClearLog.addEventListener('click', () => {
   saveLog();
 });
 
-elBtnClearSignals.addEventListener('click', () => {
-  $('input-signals').value = '';
-  saveForm();
-});
-
 // ── Estatísticas ──────────────────────────────────────────────────────────────
 function updateStats() {
   $('stat-total').textContent   = state.totalScheduled;
@@ -156,51 +92,8 @@ function setConnectedUI(connected) {
 
   if (!connected) {
     elSectionAccount.classList.add('hidden');
-    elApiHealthBadge.textContent = 'API ●';
-    elApiHealthBadge.className   = 'badge badge-offline';
   }
 }
-
-// ── API Health Badge ──────────────────────────────────────────────────────────
-socket.on('api:health', ({ ok, message }) => {
-  if (ok) {
-    elApiHealthBadge.className   = 'badge badge-api-ok';
-    elApiHealthBadge.textContent = 'API ✓';
-    elApiHealthBadge.title       = message || 'API respondendo normalmente';
-  } else {
-    elApiHealthBadge.className   = 'badge badge-api-fail';
-    elApiHealthBadge.textContent = 'API ✗';
-    elApiHealthBadge.title       = message || 'API sem resposta';
-    addLog(`⚠️ Health check da API: ${message || 'sem resposta'}`, 'warn');
-  }
-});
-
-socket.on('api:precheck:fail', ({ signal, message }) => {
-  addLog(`🔴 PRÉ-CHECK FALHOU para ${signal?.rawSymbol || '?'} às ${signal?.scheduledTimeLabel || '?'}: ${message}`, 'error');
-});
-
-socket.on('api:precheck:ok', ({ signal }) => {
-  addLog(`🟢 Pré-check OK para ${signal?.rawSymbol || '?'} às ${signal?.scheduledTimeLabel || '?'}`, 'muted');
-});
-
-socket.on('api:reconnecting', ({ message }) => {
-  elApiHealthBadge.className   = 'badge badge-api-warn';
-  elApiHealthBadge.textContent = 'API ↻';
-  addLog(message || '🔄 Reconectando à API...', 'warn');
-});
-
-socket.on('api:reconnected', ({ message }) => {
-  elApiHealthBadge.className   = 'badge badge-api-ok';
-  elApiHealthBadge.textContent = 'API ✓';
-  addLog(message || '🟢 Reconectado com sucesso', 'success');
-});
-
-socket.on('api:reconnect:fail', ({ message }) => {
-  elApiHealthBadge.className   = 'badge badge-api-fail';
-  elApiHealthBadge.textContent = 'API ✗';
-  addLog(message || '❌ Falha ao reconectar', 'error');
-});
-
 // ── Tabela de Agendamentos ─────────────────────────────────────────────────────
 function statusBadge(status) {
   const map = {
@@ -214,266 +107,73 @@ function statusBadge(status) {
   return `<span class="status-badge ${s.cls}">${s.label}</span>`;
 }
 
-function _buildScheduleRow(d) {
-  const dirClass = d.direction === 'CALL' ? 'direction-call' : 'direction-put';
-  const tr = document.createElement('tr');
-  tr.innerHTML =
-    `<td>${escapeHtml(d.scheduledTime)}</td>` +
-    `<td>${escapeHtml(d.rawSymbol)}</td>` +
-    `<td class="${dirClass}">${d.direction === 'CALL' ? '⬆️ CALL' : '⬇️ PUT'}</td>` +
-    `<td>${escapeHtml(d.duration)}</td>` +
-    `<td>${escapeHtml(d.stake)}</td>` +
-    `<td class="sch-gale-cell">${escapeHtml(d.galeLabel)}</td>` +
-    `<td class="sch-status-cell">${statusBadge(d.status)}</td>` +
-    `<td><button class="btn btn-ghost btn-cancel-signal" data-id="${escapeHtml(d.id)}"${d.status !== 'waiting' ? ' disabled' : ''}>Cancelar</button></td>`;
-  return tr;
-}
-
-function _applyScheduleFilters(data) {
-  return data.filter(d => {
-    const row = [
-      d.scheduledTime,
-      d.rawSymbol,
-      d.direction === 'CALL' ? 'CALL' : 'PUT',
-      d.duration,
-      d.stake,
-      d.galeLabel,
-      d.status,
-    ];
-    return Object.entries(schedFilters).every(([col, val]) => {
-      if (!val) return true;
-      const cell = row[parseInt(col, 10)] || '';
-      return cell.toLowerCase().includes(val.toLowerCase());
-    });
-  });
-}
-
-function _applyScheduleSort(data) {
-  if (!schedSort.dir) return data;
-  return [...data].sort((a, b) => {
-    const cmp = a.scheduledTime.localeCompare(b.scheduledTime);
-    return schedSort.dir === 'asc' ? cmp : -cmp;
-  });
-}
-
-function renderScheduleTable() {
-  const filtered   = _applyScheduleFilters(_scheduleData);
-  const sorted     = _applyScheduleSort(filtered);
-  const total      = sorted.length;
-  const perPage    = schedPagination.perPage;
-  const totalPages = Math.max(1, Math.ceil(total / perPage));
-
-  schedPagination.page = Math.min(schedPagination.page, totalPages - 1);
-
-  const start = schedPagination.page * perPage;
-  const slice = sorted.slice(start, start + perPage);
-
-  elScheduleBody.innerHTML = '';
-  slice.forEach(d => {
-    let tr = scheduleRows.get(d.id);
-    if (!tr) {
-      tr = _buildScheduleRow(d);
-      scheduleRows.set(d.id, tr);
-    }
-    elScheduleBody.appendChild(tr);
-  });
-
-  const pagDiv   = $('schedule-pagination');
-  const pageInfo = $('sch-page-info');
-  const btnPrev  = $('sch-prev');
-  const btnNext  = $('sch-next');
-
-  if (total > perPage) {
-    pagDiv.classList.remove('hidden');
-    pageInfo.textContent = `Página ${schedPagination.page + 1} de ${totalPages} (${total} itens)`;
-    btnPrev.disabled = schedPagination.page === 0;
-    btnNext.disabled = schedPagination.page >= totalPages - 1;
-  } else {
-    pagDiv.classList.add('hidden');
-  }
-}
-
-$('sch-prev').addEventListener('click', () => {
-  if (schedPagination.page > 0) { schedPagination.page--; renderScheduleTable(); }
-});
-$('sch-next').addEventListener('click', () => {
-  schedPagination.page++;
-  renderScheduleTable();
-});
-
 function addScheduleRow(data) {
   const { signal, expired, baseStake } = data;
   const scheduledTime = new Date(signal.scheduledAt).toLocaleTimeString('pt-BR', {
     hour: '2-digit', minute: '2-digit',
   });
+  const dirClass = signal.direction === 'CALL' ? 'direction-call' : 'direction-put';
   const status = expired ? 'expired' : 'waiting';
   const stakeDisplay = `$${parseFloat(baseStake || 1).toFixed(2)}`;
   const duration = `${signal.duration}${signal.duration_unit}`;
 
-  const entry = {
+  const tr = document.createElement('tr');
+  tr.innerHTML = `
+    <td>${scheduledTime}</td>
+    <td>${escapeHtml(signal.rawSymbol)}</td>
+    <td class="${dirClass}">${signal.direction === 'CALL' ? '⬆️ CALL' : '⬇️ PUT'}</td>
+    <td>${escapeHtml(duration)}</td>
+    <td>${escapeHtml(stakeDisplay)}</td>
+    <td id="sch-gale-${signal.id}">—</td>
+    <td id="sch-status-${signal.id}">${statusBadge(status)}</td>
+    <td><button class="btn btn-ghost btn-cancel-signal" data-id="${signal.id}"${status === 'expired' ? ' disabled' : ''}>Cancelar</button></td>
+  `;
+  scheduleRows.set(signal.id, tr);
+  elScheduleBody.prepend(tr);
+
+  _scheduleData.unshift({
     id: signal.id,
     scheduledTime,
-    rawSymbol:  signal.rawSymbol,
-    direction:  signal.direction,
+    rawSymbol: signal.rawSymbol,
+    direction: signal.direction,
     duration,
-    stake:      stakeDisplay,
-    galeLabel:  '—',
+    stake: stakeDisplay,
+    galeLabel: '—',
     status,
-  };
-  _scheduleData.unshift(entry);
-
-  const tr = _buildScheduleRow(entry);
-  scheduleRows.set(signal.id, tr);
-
-  renderScheduleTable();
+  });
   saveSchedule();
 }
 
 function updateScheduleStatus(signalId, status, galeLabel) {
+  const statusEl = document.getElementById(`sch-status-${signalId}`);
+  if (statusEl) statusEl.innerHTML = statusBadge(status);
+  if (galeLabel !== undefined) {
+    const galeEl = document.getElementById(`sch-gale-${signalId}`);
+    if (galeEl) galeEl.textContent = galeLabel;
+  }
+  // Desabilita botão cancelar quando não está mais aguardando
+  if (status !== 'waiting') {
+    const tr = scheduleRows.get(signalId);
+    const btn = tr?.querySelector('.btn-cancel-signal');
+    if (btn) btn.disabled = true;
+  }
   const entry = _scheduleData.find(d => d.id === signalId);
   if (entry) {
     entry.status = status;
     if (galeLabel !== undefined) entry.galeLabel = galeLabel;
   }
-
-  const tr = scheduleRows.get(signalId);
-  if (tr) {
-    const statusCell = tr.querySelector('.sch-status-cell');
-    if (statusCell) statusCell.innerHTML = statusBadge(status);
-    if (galeLabel !== undefined) {
-      const galeCell = tr.querySelector('.sch-gale-cell');
-      if (galeCell) galeCell.textContent = galeLabel;
-    }
-    if (status !== 'waiting') {
-      const btn = tr.querySelector('.btn-cancel-signal');
-      if (btn) btn.disabled = true;
-    }
-  }
-
   saveSchedule();
 }
 
 function removeScheduleRow(signalId) {
   const tr = scheduleRows.get(signalId);
-  if (tr) { tr.remove(); scheduleRows.delete(signalId); }
+  if (tr) {
+    tr.remove();
+    scheduleRows.delete(signalId);
+  }
   const idx = _scheduleData.findIndex(d => d.id === signalId);
   if (idx !== -1) _scheduleData.splice(idx, 1);
-  renderScheduleTable();
   saveSchedule();
-}
-
-// ── Ordenação por Horário ─────────────────────────────────────────────────────
-$('sort-sch-time').addEventListener('click', () => {
-  const btn = $('sort-sch-time');
-  if (schedSort.dir === 'asc') {
-    schedSort.dir = 'desc'; btn.textContent = '▼'; btn.className = 'sort-btn desc';
-  } else if (schedSort.dir === 'desc') {
-    schedSort.dir = null;   btn.textContent = '⇅'; btn.className = 'sort-btn';
-  } else {
-    schedSort.dir = 'asc';  btn.textContent = '▲'; btn.className = 'sort-btn asc';
-  }
-  schedPagination.page = 0;
-  renderScheduleTable();
-});
-
-$('sort-res-time').addEventListener('click', () => {
-  const btn = $('sort-res-time');
-  if (resultsSort.dir === 'asc') {
-    resultsSort.dir = 'desc'; btn.textContent = '▼'; btn.className = 'sort-btn desc';
-  } else if (resultsSort.dir === 'desc') {
-    resultsSort.dir = null;   btn.textContent = '⇅'; btn.className = 'sort-btn';
-  } else {
-    resultsSort.dir = 'asc';  btn.textContent = '▲'; btn.className = 'sort-btn asc';
-  }
-  renderResultsTable();
-});
-
-// ── Filtros nas tabelas ───────────────────────────────────────────────────────
-document.querySelectorAll('.th-filter[data-table="schedule"]').forEach(input => {
-  input.addEventListener('input', () => {
-    schedFilters[input.dataset.col] = input.value;
-    schedPagination.page = 0;
-    renderScheduleTable();
-  });
-});
-
-document.querySelectorAll('.th-filter[data-table="results"]').forEach(input => {
-  input.addEventListener('input', () => {
-    resultsFilters[input.dataset.col] = input.value;
-    renderResultsTable();
-  });
-});
-
-// ── Tabela de Resultados ──────────────────────────────────────────────────────
-function _applyResultsFilter(data) {
-  return data.filter(r => {
-    const row = [
-      r.scheduledTime,
-      r.rawSymbol,
-      r.direction === 'CALL' ? 'CALL' : 'PUT',
-      r.duration,
-      `$${parseFloat(r.stake).toFixed(2)}`,
-      r.galeRound > 0 ? `G${r.galeRound}` : '—',
-      r.won ? 'WIN' : 'LOSS',
-      `${r.profit >= 0 ? '+' : ''}$${parseFloat(r.profit).toFixed(2)}`,
-    ];
-    return Object.entries(resultsFilters).every(([col, val]) => {
-      if (!val) return true;
-      const cell = row[parseInt(col, 10)] || '';
-      return cell.toLowerCase().includes(val.toLowerCase());
-    });
-  });
-}
-
-function _applyResultsSort(data) {
-  if (!resultsSort.dir) return data;
-  return [...data].sort((a, b) => {
-    const cmp = a.scheduledTime.localeCompare(b.scheduledTime);
-    return resultsSort.dir === 'asc' ? cmp : -cmp;
-  });
-}
-
-function renderResultsTable() {
-  const filtered = _applyResultsFilter(_resultRows);
-  const sorted   = _applyResultsSort(filtered);
-
-  elResultsBody.innerHTML = '';
-  sorted.forEach(r => {
-    const tr = document.createElement('tr');
-    tr.className = r.won ? 'win' : 'loss';
-    const profitClass = r.profit >= 0 ? 'profit-positive' : 'profit-negative';
-    const dirClass    = r.direction === 'CALL' ? 'direction-call' : 'direction-put';
-    tr.innerHTML =
-      `<td>${escapeHtml(r.scheduledTime)}</td>` +
-      `<td>${escapeHtml(r.rawSymbol)}</td>` +
-      `<td class="${dirClass}">${r.direction === 'CALL' ? '⬆️ CALL' : '⬇️ PUT'}</td>` +
-      `<td>${escapeHtml(r.duration)}</td>` +
-      `<td>$${parseFloat(r.stake).toFixed(2)}</td>` +
-      `<td>${r.galeRound > 0 ? 'G' + r.galeRound : '—'}</td>` +
-      `<td>${r.won ? '✅ WIN' : '❌ LOSS'}</td>` +
-      `<td class="${profitClass}">${r.profit >= 0 ? '+' : ''}$${parseFloat(r.profit).toFixed(2)}</td>`;
-    elResultsBody.appendChild(tr);
-  });
-}
-
-function addResultRow({ signal, won, profit, stake, galeRound }) {
-  const scheduledTime = new Date(signal.scheduledAt).toLocaleTimeString('pt-BR', {
-    hour: '2-digit', minute: '2-digit',
-  });
-
-  _resultRows.unshift({
-    scheduledTime,
-    rawSymbol: signal.rawSymbol,
-    direction: signal.direction,
-    duration:  signal.duration + signal.duration_unit,
-    stake,
-    galeRound,
-    won,
-    profit,
-  });
-
-  renderResultsTable();
-  saveResults();
 }
 
 // ── localStorage ───────────────────────────────────────────────────────────
@@ -512,7 +212,7 @@ function saveStats() {
 
 function saveResults() {
   try {
-    localStorage.setItem(LS.RESULTS, JSON.stringify(_resultRows.slice(0, 200)));
+    localStorage.setItem(LS.RESULTS, JSON.stringify(_resultRows.slice(-200)));
   } catch (_) {}
 }
 
@@ -566,22 +266,34 @@ function restoreState() {
 
   try {
     const results = JSON.parse(localStorage.getItem(LS.RESULTS) || '[]');
-    results.forEach(r => _resultRows.push(r));
-    renderResultsTable();
+    results.forEach(r => {
+      _resultRows.push(r);
+      _renderResultRow(r);
+    });
   } catch (_) {}
 
   try {
     const schedule = JSON.parse(localStorage.getItem(LS.SCHEDULE) || '[]');
     schedule.forEach(d => {
       const status = (d.status === 'waiting' || d.status === 'executing') ? 'expired' : d.status;
-      const entry = { ...d, status };
-      _scheduleData.push(entry);
-      scheduleRows.set(d.id, _buildScheduleRow(entry));
+      const dirClass = d.direction === 'CALL' ? 'direction-call' : 'direction-put';
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td>${escapeHtml(d.scheduledTime)}</td>
+        <td>${escapeHtml(d.rawSymbol)}</td>
+        <td class="${dirClass}">${d.direction === 'CALL' ? '⬆️ CALL' : '⬇️ PUT'}</td>
+        <td>${escapeHtml(d.duration)}</td>
+        <td>${escapeHtml(d.stake)}</td>
+        <td id="sch-gale-${d.id}">${escapeHtml(d.galeLabel)}</td>
+        <td id="sch-status-${d.id}">${statusBadge(status)}</td>
+        <td><button class="btn btn-ghost btn-cancel-signal" data-id="${d.id}" disabled>Cancelar</button></td>
+      `;
+      scheduleRows.set(d.id, tr);
+      elScheduleBody.appendChild(tr);
+      _scheduleData.push({ ...d, status });
     });
-    renderScheduleTable();
   } catch (_) {}
 }
-
 // ── Formulário de Configuração ────────────────────────────────────────────────
 elFormConfig.addEventListener('submit', (e) => {
   e.preventDefault();
@@ -594,7 +306,8 @@ elFormConfig.addEventListener('submit', (e) => {
   if (!token) return addLog('⚠️ Informe o Token da API.', 'warn');
   if (!appId)  return addLog('⚠️ Informe o App ID.', 'warn');
 
-  const isNewToken    = token.startsWith('pat_');
+  // Detecta combinação inválida: token pat_ com App ID numérico (legado)
+  const isNewToken = token.startsWith('pat_');
   const isNumericAppId = /^\d+$/.test(appId);
   if (isNewToken && isNumericAppId) {
     return addLog(
@@ -616,9 +329,11 @@ elBtnDisconnect.addEventListener('click', () => {
 
 // ── Trocar Conta ──────────────────────────────────────────────────────────────
 elBtnSwitch && elBtnSwitch.addEventListener('click', () => {
+  // Para nova API: usa o loginid (account_id) selecionado no select
+  // Para API legada: usa o token digitado no input
   const selectedAccountId = elSelectAccount?.value?.trim();
-  const inputToken        = $('input-switch-token')?.value?.trim();
-  const tokenOrId         = selectedAccountId || inputToken;
+  const inputToken = $('input-switch-token')?.value?.trim();
+  const tokenOrId = selectedAccountId || inputToken;
   if (!tokenOrId) return addLog('⚠️ Selecione ou informe a conta destino.', 'warn');
   socket.emit('account:switch', { token: tokenOrId });
 });
@@ -627,12 +342,13 @@ elBtnSwitch && elBtnSwitch.addEventListener('click', () => {
 elFormSignals.addEventListener('submit', (e) => {
   e.preventDefault();
   const signalsText = $('input-signals').value.trim();
-  const date        = $('input-date').value;
+  const date        = $('input-date').value; // formato AAAA-MM-DD
   const stake       = parseFloat($('input-stake').value) || 1;
   const maxGales    = parseInt($('input-maxgales').value, 10) || 0;
 
   if (!signalsText) return addLog('⚠️ Cole os sinais antes de agendar.', 'warn');
 
+  // Converte YYYY-MM-DD → DD/MM/YYYY para o servidor
   const [y, m, d] = date.split('-');
   const dateFormatted = `${d}/${m}/${y}`;
 
@@ -643,7 +359,7 @@ elBtnCancelAll.addEventListener('click', () => {
   socket.emit('trades:cancel');
 });
 
-// Cancelamento individual (event delegation)
+// Cancelamento individual de agendamento (event delegation)
 elScheduleBody.addEventListener('click', (e) => {
   const btn = e.target.closest('.btn-cancel-signal');
   if (!btn) return;
@@ -654,15 +370,69 @@ elScheduleBody.addEventListener('click', (e) => {
   }
 });
 
+// ── Tabela de Resultados ──────────────────────────────────────────────────────
+function _renderResultRow(r) {
+  const tr = document.createElement('tr');
+  tr.className = r.won ? 'win' : 'loss';
+  const profitClass = r.profit >= 0 ? 'profit-positive' : 'profit-negative';
+  const dirClass    = r.direction === 'CALL' ? 'direction-call' : 'direction-put';
+  tr.innerHTML =
+    `<td>${escapeHtml(r.scheduledTime)}</td>` +
+    `<td>${escapeHtml(r.rawSymbol)}</td>` +
+    `<td class="${dirClass}">${r.direction === 'CALL' ? '\u2b06\ufe0f CALL' : '\u2b07\ufe0f PUT'}</td>` +
+    `<td>${escapeHtml(r.duration)}</td>` +
+    `<td>$${parseFloat(r.stake).toFixed(2)}</td>` +
+    `<td>${r.galeRound > 0 ? 'G' + r.galeRound : '\u2014'}</td>` +
+    `<td>${r.won ? '\u2705 WIN' : '\u274c LOSS'}</td>` +
+    `<td class="${profitClass}">${r.profit >= 0 ? '+' : ''}$${parseFloat(r.profit).toFixed(2)}</td>`;
+  elResultsBody.prepend(tr);
+}
+
+function addResultRow({ signal, won, profit, stake, galeRound }) {
+  const scheduledTime = new Date(signal.scheduledAt).toLocaleTimeString('pt-BR', {
+    hour: '2-digit', minute: '2-digit',
+  });
+
+  const tr = document.createElement('tr');
+  tr.className = won ? 'win' : 'loss';
+
+  const profitClass = profit >= 0 ? 'profit-positive' : 'profit-negative';
+  const dirClass    = signal.direction === 'CALL' ? 'direction-call' : 'direction-put';
+
+  tr.innerHTML = `
+    <td>${scheduledTime}</td>
+    <td>${signal.rawSymbol}</td>
+    <td class="${dirClass}">${signal.direction === 'CALL' ? '⬆️ CALL' : '⬇️ PUT'}</td>
+    <td>${signal.duration}${signal.duration_unit}</td>
+    <td>$${parseFloat(stake).toFixed(2)}</td>
+    <td>${galeRound > 0 ? `G${galeRound}` : '—'}</td>
+    <td>${won ? '✅ WIN' : '❌ LOSS'}</td>
+    <td class="${profitClass}">${profit >= 0 ? '+' : ''}$${parseFloat(profit).toFixed(2)}</td>
+  `;
+
+  elResultsBody.prepend(tr); // Mais recente no topo
+
+  _resultRows.push({
+    scheduledTime,
+    rawSymbol:  signal.rawSymbol,
+    direction:  signal.direction,
+    duration:   signal.duration + signal.duration_unit,
+    stake,
+    galeRound,
+    won,
+    profit,
+  });
+  saveResults();
+}
 // ── Persistência de formulário ────────────────────────────────────────────
 ['input-token', 'input-appid', 'input-accountid', 'input-stake', 'input-maxgales'].forEach(id => {
   $(id)?.addEventListener('input', saveForm);
 });
 $('input-signals')?.addEventListener('input', saveForm);
 $('input-date')?.addEventListener('change', saveForm);
-
 // ── Eventos do Socket.io ──────────────────────────────────────────────────────
 
+// Conectado à Deriv
 socket.on('connection:status', (data) => {
   setConnectedUI(data.connected);
 
@@ -673,6 +443,7 @@ socket.on('connection:status', (data) => {
     $('acc-balance').textContent = `$${parseFloat(balance.amount).toFixed(2)} ${balance.currency}`;
     elSectionAccount.classList.remove('hidden');
 
+    // Preenche select de contas alternativas (se houver)
     const others = (account.accountList || []).filter(a => a.loginid !== account.loginid);
     if (others.length > 0) {
       elSelectAccount.innerHTML = others
@@ -685,43 +456,53 @@ socket.on('connection:status', (data) => {
   if (data.message) addLog(data.message, data.connected ? 'success' : 'error');
 });
 
+// Sinais processados
 socket.on('signals:parsed', (data) => {
   state.totalScheduled += data.count;
   updateStats();
   addLog(data.message, 'info');
 });
 
+// Trade agendado
 socket.on('trade:scheduled', (data) => {
   addLog(data.message, data.expired ? 'warn' : 'muted');
   addScheduleRow(data);
 });
 
+// Trade em execução
 socket.on('trade:executing', (data) => {
   addLog(data.message, 'info');
   const galeLabel = data.galeRound > 0 ? `G${data.galeRound}` : undefined;
   updateScheduleStatus(data.signal.id, 'executing', galeLabel);
 });
 
+// Ordem aberta
 socket.on('trade:bought', (data) => {
   addLog(data.message, 'info');
 });
 
-socket.on('trade:update', (_data) => {});
+// Atualização em tempo real do contrato
+socket.on('trade:update', (data) => {
+  // Opcional: atualizar algum indicador de progresso
+});
 
+// Resultado final do trade
 socket.on('trade:result', (data) => {
   const type = data.won ? 'success' : 'error';
   addLog(data.message, type);
 
-  if (!data.isFinal) return;
+  if (!data.isFinal) {
+    // Resultado intermediário de gale — apenas loga; aguarda o resultado final
+    return;
+  }
 
-  playSound(data.won ? 'win' : 'loss');
-
+  // Resultado final (WIN, ou LOSS sem mais gales)
   if (data.won) {
     state.wins++;
     state.totalProfit += data.profit;
   } else {
     state.losses++;
-    state.totalProfit += data.profit;
+    state.totalProfit += data.profit; // profit é negativo para perdas
   }
 
   removeScheduleRow(data.signal.id);
@@ -729,10 +510,12 @@ socket.on('trade:result', (data) => {
   updateStats();
 });
 
+// Limite de gale atingido
 socket.on('trade:gale_limit', (data) => {
   addLog(data.message, 'warn');
 });
 
+// Cancelamento
 socket.on('trades:cancelled', (data) => {
   addLog(data.message, 'warn');
   state.totalScheduled = 0;
@@ -740,27 +523,28 @@ socket.on('trades:cancelled', (data) => {
   _scheduleData.forEach(d => {
     if (d.status === 'waiting' || d.status === 'executing') {
       d.status = 'cancelled';
+      const statusEl = document.getElementById(`sch-status-${d.id}`);
+      if (statusEl) statusEl.innerHTML = statusBadge('cancelled');
       const tr = scheduleRows.get(d.id);
-      if (tr) {
-        const statusCell = tr.querySelector('.sch-status-cell');
-        if (statusCell) statusCell.innerHTML = statusBadge('cancelled');
-        const btn = tr.querySelector('.btn-cancel-signal');
-        if (btn) btn.disabled = true;
-      }
+      const btn = tr?.querySelector('.btn-cancel-signal');
+      if (btn) btn.disabled = true;
     }
   });
   saveSchedule();
 });
 
+// Cancelamento individual confirmado
 socket.on('signal:cancelled', (data) => {
   updateScheduleStatus(data.signalId, 'cancelled');
-  addLog('🛑 Sinal cancelado individualmente.', 'warn');
+  addLog(`🛑 Sinal cancelado individualmente.`, 'warn');
 });
 
+// Erros gerais
 socket.on('error', (data) => {
   addLog(`❌ ${data.message}`, 'error');
 });
 
+// Erro em trade específico
 socket.on('trade:error', (data) => {
   addLog(data.message, 'error');
   if (data.signal?.id) updateScheduleStatus(data.signal.id, 'expired');

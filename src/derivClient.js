@@ -273,8 +273,38 @@ class DerivClient {
     }
 
     this._authorized = true;
+    this._legacyToken = token; // armazenado para reconexão automática
     this.accountInfo = response.authorize;
     return response.authorize;
+  }
+
+  /**
+   * Reconecta automaticamente usando as credenciais já armazenadas.
+   * Funciona para nova API (pat_) e API legada (a1-).
+   * @returns {Promise<void>}
+   */
+  async reconnect() {
+    this._stopPing();
+    if (this._ws) {
+      try { this._ws.terminate(); } catch (_) {}
+      this._ws = null;
+    }
+    this._authorized = false;
+    this._pending.clear();
+
+    if (this.accountInfo?._patToken) {
+      // Nova API: usa OTP armazenado
+      const { _patToken, _appId, loginid } = this.accountInfo;
+      const wsUrl = await this._getOTPUrl(_patToken, _appId, loginid);
+      await this._connectToUrl(wsUrl);
+      this._authorized = true;
+    } else if (this._legacyToken) {
+      // API Legada: reconecta e reautoriza
+      await this.connect();
+      await this.authorize(this._legacyToken);
+    } else {
+      throw new Error('Credenciais não disponíveis para reconexão automática');
+    }
   }
 
 
@@ -493,6 +523,21 @@ class DerivClient {
     if (this._pingTimer) {
       clearInterval(this._pingTimer);
       this._pingTimer = null;
+    }
+  }
+
+  /**
+   * Envia um ping à API e retorna true se a API responder dentro do timeout.
+   * Usado pelo health check periódico e pré-check antes de trades.
+   * @param {number} [timeoutMs=5000]
+   * @returns {Promise<boolean>}
+   */
+  async ping(timeoutMs = 5_000) {
+    try {
+      const response = await this._send({ ping: 1 }, timeoutMs);
+      return response.ping === 'pong' || !!response.pong || !response.error;
+    } catch {
+      return false;
     }
   }
 }

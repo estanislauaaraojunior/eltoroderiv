@@ -84,6 +84,35 @@ class Scheduler {
         baseStake: this._galeManager.baseStake,
       });
 
+      // Pré-check 1 minuto antes da entrada
+      const preCheckDelay = delay - 60_000;
+      if (preCheckDelay > 0) {
+        setTimeout(async () => {
+          if (!this._derivClient || !this._emit) return;
+          const label = this._formatTime(signal.scheduledAt);
+          try {
+            const ok = await this._derivClient.ping(5_000);
+            if (ok) {
+              this._emit('api:precheck:ok', {
+                signal: { ...signal, scheduledTimeLabel: label },
+              });
+            } else {
+              this._emit('api:precheck:fail', {
+                signal: { ...signal, scheduledTimeLabel: label },
+                message: 'Sem resposta (ping timeout) — tentando reconectar...',
+              });
+              await this._tryReconnect(signal, label);
+            }
+          } catch (err) {
+            this._emit('api:precheck:fail', {
+              signal: { ...signal, scheduledTimeLabel: label },
+              message: `${err.message} — tentando reconectar...`,
+            });
+            await this._tryReconnect(signal, label);
+          }
+        }, preCheckDelay);
+      }
+
       const handle = setTimeout(() => {
         this._timers.delete(signal.id);
         this._scheduledKeys.delete(slotKey);
@@ -136,8 +165,56 @@ class Scheduler {
    * @param {number}  stake    Valor da entrada nesta tentativa
    * @param {number}  galeRound Número do gale atual (0 = entrada original)
    */
+  /**
+   * Tenta reconectar ao WebSocket e emite eventos de status ao front-end.
+   */
+  async _tryReconnect(signal, label) {
+    if (!this._derivClient || !this._emit) return;
+    this._emit('api:reconnecting', {
+      signal: { ...signal, scheduledTimeLabel: label },
+      message: `🔄 Reconectando à API antes de ${label}...`,
+    });
+    try {
+      await this._derivClient.reconnect();
+      this._emit('api:reconnected', {
+        signal: { ...signal, scheduledTimeLabel: label },
+        message: `🟢 Reconectado com sucesso antes de ${label}`,
+      });
+    } catch (reconnErr) {
+      this._emit('api:reconnect:fail', {
+        signal: { ...signal, scheduledTimeLabel: label },
+        message: `❌ Falha ao reconectar: ${reconnErr.message}`,
+      });
+    }
+  }
+
   async _executeTrade(signal, stake, galeRound) {
     const label = galeRound === 0 ? 'Entrada' : `Gale ${galeRound}`;
+
+    // Se WebSocket caiu, tenta reconectar antes de executar
+    if (!this._derivClient?.isConnected) {
+      try {
+        const timeLabel = this._formatTime(signal.scheduledAt);
+        this._emit('api:reconnecting', {
+          signal: { ...signal, scheduledTimeLabel: timeLabel },
+          message: `🔄 API desconectada — reconectando antes de ${label}...`,
+        });
+        await this._derivClient.reconnect();
+        this._emit('api:reconnected', {
+          signal: { ...signal, scheduledTimeLabel: timeLabel },
+          message: `🟢 Reconectado — prosseguindo com ${label} (${signal.rawSymbol})`,
+        });
+      } catch (reconnErr) {
+        signal.status = 'error';
+        this._emit('trade:error', {
+          signal,
+          error: reconnErr.message,
+          galeRound,
+          message: `💥 Sem conexão e falha ao reconectar para ${signal.rawSymbol}: ${reconnErr.message}`,
+        });
+        return;
+      }
+    }
 
     this._emit('trade:executing', {
       signal,

@@ -10,7 +10,10 @@
   <header>
     <div class="header-inner">
       <h1>🐂 ElToro<span>Deriv</span></h1>
-      <div id="status-badge" class="badge badge-offline">Desconectado</div>
+      <div class="header-badges">
+        <div id="api-health-badge" class="badge badge-offline" title="Status da API Deriv">API ●</div>
+        <div id="status-badge" class="badge badge-offline">Desconectado</div>
+      </div>
     </div>
   </header>
 
@@ -105,6 +108,7 @@
           </label>
           <div class="btn-row">
             <button type="submit" id="btn-schedule" class="btn btn-success" disabled>Agendar</button>
+            <button type="button" id="btn-clear-signals" class="btn btn-secondary">Limpar</button>
             <button type="button" id="btn-cancel-all" class="btn btn-danger" disabled>Cancelar Tudo</button>
           </div>
         </form>
@@ -135,15 +139,6 @@
         </div>
       </section>
 
-      <!-- Log de Atividade -->
-      <section class="card">
-        <div class="card-header">
-          <h2>📡 Log de Atividade</h2>
-          <button type="button" id="btn-clear-log" class="btn btn-ghost">Limpar</button>
-        </div>
-        <div id="log" class="log-container"></div>
-      </section>
-
       <!-- Tabela de Agendamentos -->
       <section class="card">
         <h2>📅 Agendamentos</h2>
@@ -151,18 +146,23 @@
           <table id="schedule-table">
             <thead>
               <tr>
-                <th>Horário</th>
-                <th>Par</th>
-                <th>Direção</th>
-                <th>Duração</th>
-                <th>Stake</th>
-                <th>Gale</th>
-                <th>Status</th>
+                <th><div class="th-label">Horário <span class="sort-btn" id="sort-sch-time" title="Ordenar por Horário">⇅</span></div><input type="text" class="th-filter" data-table="schedule" data-col="0" placeholder="Filtrar..."></th>
+                <th><div class="th-label">Par</div><input type="text" class="th-filter" data-table="schedule" data-col="1" placeholder="Filtrar..."></th>
+                <th><div class="th-label">Direção</div><input type="text" class="th-filter" data-table="schedule" data-col="2" placeholder="Filtrar..."></th>
+                <th><div class="th-label">Duração</div><input type="text" class="th-filter" data-table="schedule" data-col="3" placeholder="Filtrar..."></th>
+                <th><div class="th-label">Stake</div><input type="text" class="th-filter" data-table="schedule" data-col="4" placeholder="Filtrar..."></th>
+                <th><div class="th-label">Gale</div><input type="text" class="th-filter" data-table="schedule" data-col="5" placeholder="Filtrar..."></th>
+                <th><div class="th-label">Status</div><input type="text" class="th-filter" data-table="schedule" data-col="6" placeholder="Filtrar..."></th>
                 <th>Ações</th>
               </tr>
             </thead>
             <tbody id="schedule-body"></tbody>
           </table>
+        </div>
+        <div id="schedule-pagination" class="pagination hidden">
+          <button id="sch-prev" class="btn btn-ghost">◀ Anterior</button>
+          <span id="sch-page-info">Página 1 de 1</span>
+          <button id="sch-next" class="btn btn-ghost">Próxima ▶</button>
         </div>
       </section>
 
@@ -173,19 +173,28 @@
           <table id="results-table">
             <thead>
               <tr>
-                <th>Horário</th>
-                <th>Par</th>
-                <th>Direção</th>
-                <th>Duração</th>
-                <th>Stake</th>
-                <th>Gale</th>
-                <th>Resultado</th>
-                <th>Lucro</th>
+                <th><div class="th-label">Horário <span class="sort-btn" id="sort-res-time" title="Ordenar por Horário">⇅</span></div><input type="text" class="th-filter" data-table="results" data-col="0" placeholder="Filtrar..."></th>
+                <th><div class="th-label">Par</div><input type="text" class="th-filter" data-table="results" data-col="1" placeholder="Filtrar..."></th>
+                <th><div class="th-label">Direção</div><input type="text" class="th-filter" data-table="results" data-col="2" placeholder="Filtrar..."></th>
+                <th><div class="th-label">Duração</div><input type="text" class="th-filter" data-table="results" data-col="3" placeholder="Filtrar..."></th>
+                <th><div class="th-label">Stake</div><input type="text" class="th-filter" data-table="results" data-col="4" placeholder="Filtrar..."></th>
+                <th><div class="th-label">Gale</div><input type="text" class="th-filter" data-table="results" data-col="5" placeholder="Filtrar..."></th>
+                <th><div class="th-label">Resultado</div><input type="text" class="th-filter" data-table="results" data-col="6" placeholder="Filtrar..."></th>
+                <th><div class="th-label">Lucro</div><input type="text" class="th-filter" data-table="results" data-col="7" placeholder="Filtrar..."></th>
               </tr>
             </thead>
             <tbody id="results-body"></tbody>
           </table>
         </div>
+      </section>
+
+      <!-- Log de Atividade -->
+      <section class="card">
+        <div class="card-header">
+          <h2>📡 Log de Atividade</h2>
+          <button type="button" id="btn-clear-log" class="btn btn-ghost">Limpar</button>
+        </div>
+        <div id="log" class="log-container"></div>
       </section>
 
     </div>
