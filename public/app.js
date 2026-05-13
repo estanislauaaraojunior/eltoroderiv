@@ -10,6 +10,8 @@ const state = {
   losses: 0,
   totalProfit: 0,
   totalScheduled: 0,
+  balance: null,
+  balanceCurrency: 'USD',
 };
 
 // ── Elementos ─────────────────────────────────────────────────────────────────
@@ -31,6 +33,7 @@ const elLog              = $('log');
 const elResultsBody      = $('results-body');
 const elScheduleBody     = $('schedule-body');
 const elSelectAccount    = $('select-account');
+const elStatBalance      = $('stat-balance');
 
 // Rastreia elementos de linha da tabela de agendamentos por signalId
 const scheduleRows = new Map();
@@ -41,15 +44,15 @@ const _scheduleData = [];
 const _logEntries   = [];
 
 // Paginação – agendamentos
-const schedPagination = { page: 0, perPage: 75 };
+const schedPagination = { page: 0, perPage: 30 };
 
 // Ordenação
 const schedSort   = { dir: null }; // null | 'asc' | 'desc'
 const resultsSort = { dir: null };
 
 // Filtros
-const schedFilters   = {};
-const resultsFilters = {};
+const schedFilters   = new Map(); // col → Set de valores incluídos (vazio = todos)
+const resultsFilters = new Map();
 
 // Inicializa campo de data com hoje
 const today = new Date();
@@ -131,6 +134,15 @@ elBtnClearSignals.addEventListener('click', () => {
   $('input-signals').value = '';
   saveForm();
 });
+
+// ── Saldo ─────────────────────────────────────────────────────────────────────
+function updateBalance(amount, currency) {
+  state.balance = amount;
+  state.balanceCurrency = currency || 'USD';
+  if (elStatBalance) {
+    elStatBalance.textContent = `$${parseFloat(amount).toFixed(2)} ${state.balanceCurrency}`;
+  }
+}
 
 // ── Estatísticas ──────────────────────────────────────────────────────────────
 function updateStats() {
@@ -218,6 +230,7 @@ function _buildScheduleRow(d) {
   const dirClass = d.direction === 'CALL' ? 'direction-call' : 'direction-put';
   const tr = document.createElement('tr');
   tr.innerHTML =
+    `<td class="idx-cell">—</td>` +
     `<td>${escapeHtml(d.scheduledTime)}</td>` +
     `<td>${escapeHtml(d.rawSymbol)}</td>` +
     `<td class="${dirClass}">${d.direction === 'CALL' ? '⬆️ CALL' : '⬇️ PUT'}</td>` +
@@ -225,11 +238,13 @@ function _buildScheduleRow(d) {
     `<td>${escapeHtml(d.stake)}</td>` +
     `<td class="sch-gale-cell">${escapeHtml(d.galeLabel)}</td>` +
     `<td class="sch-status-cell">${statusBadge(d.status)}</td>` +
+    `<td class="sch-payout-cell">${escapeHtml(d.payout || '—')}</td>` +
     `<td><button class="btn btn-ghost btn-cancel-signal" data-id="${escapeHtml(d.id)}"${d.status !== 'waiting' ? ' disabled' : ''}>Cancelar</button></td>`;
   return tr;
 }
 
 function _applyScheduleFilters(data) {
+  if (schedFilters.size === 0) return data;
   return data.filter(d => {
     const row = [
       d.scheduledTime,
@@ -239,12 +254,14 @@ function _applyScheduleFilters(data) {
       d.stake,
       d.galeLabel,
       d.status,
+      d.payout || '—',
     ];
-    return Object.entries(schedFilters).every(([col, val]) => {
-      if (!val) return true;
-      const cell = row[parseInt(col, 10)] || '';
-      return cell.toLowerCase().includes(val.toLowerCase());
-    });
+    for (const [col, allowed] of schedFilters) {
+      if (!allowed || allowed.size === 0) continue;
+      const cell = row[parseInt(col, 10)] || '—';
+      if (!allowed.has(cell)) return false;
+    }
+    return true;
   });
 }
 
@@ -269,12 +286,14 @@ function renderScheduleTable() {
   const slice = sorted.slice(start, start + perPage);
 
   elScheduleBody.innerHTML = '';
-  slice.forEach(d => {
+  slice.forEach((d, i) => {
     let tr = scheduleRows.get(d.id);
     if (!tr) {
       tr = _buildScheduleRow(d);
       scheduleRows.set(d.id, tr);
     }
+    const idxCell = tr.querySelector('.idx-cell');
+    if (idxCell) idxCell.textContent = start + i + 1;
     elScheduleBody.appendChild(tr);
   });
 
@@ -318,9 +337,11 @@ function addScheduleRow(data) {
     duration,
     stake:      stakeDisplay,
     galeLabel:  '—',
+    payout:     '—',
     status,
   };
   _scheduleData.unshift(entry);
+  if (_scheduleData.length > 500) _scheduleData.splice(500);
 
   const tr = _buildScheduleRow(entry);
   scheduleRows.set(signal.id, tr);
@@ -388,24 +409,129 @@ $('sort-res-time').addEventListener('click', () => {
   renderResultsTable();
 });
 
-// ── Filtros nas tabelas ───────────────────────────────────────────────────────
-document.querySelectorAll('.th-filter[data-table="schedule"]').forEach(input => {
-  input.addEventListener('input', () => {
-    schedFilters[input.dataset.col] = input.value;
-    schedPagination.page = 0;
-    renderScheduleTable();
+// ── Filtros Dropdown nas tabelas ────────────────────────────────────────────
+function _getColValues(tableKey, col) {
+  const data = tableKey === 'schedule' ? _scheduleData : _resultRows;
+  const values = new Set();
+  const colIdx = parseInt(col, 10);
+  data.forEach(d => {
+    let val;
+    if (tableKey === 'schedule') {
+      const row = [
+        d.scheduledTime, d.rawSymbol,
+        d.direction === 'CALL' ? 'CALL' : 'PUT',
+        d.duration, d.stake, d.galeLabel, d.status, d.payout || '—',
+      ];
+      val = row[colIdx] || '—';
+    } else {
+      const row = [
+        d.scheduledTime, d.rawSymbol,
+        d.direction === 'CALL' ? 'CALL' : 'PUT',
+        d.duration,
+        `$${parseFloat(d.stake).toFixed(2)}`,
+        d.galeRound > 0 ? `G${d.galeRound}` : '—',
+        d.won ? 'WIN' : 'LOSS',
+        `${d.profit >= 0 ? '+' : ''}$${parseFloat(d.profit).toFixed(2)}`,
+        d.payout || '—',
+      ];
+      val = row[colIdx] || '—';
+    }
+    values.add(val);
+  });
+  return values;
+}
+
+function _updateFilterBtnLabel(wrapper) {
+  const col = parseInt(wrapper.dataset.col, 10);
+  const tableKey = wrapper.dataset.table;
+  const filtersMap = tableKey === 'schedule' ? schedFilters : resultsFilters;
+  const btn = wrapper.querySelector('.th-filter-btn');
+  const allowed = filtersMap.get(col);
+  if (!allowed || allowed.size === 0) {
+    btn.textContent = 'Todos ▾';
+    btn.classList.remove('filter-active');
+  } else {
+    btn.textContent = `${allowed.size} sel. ▾`;
+    btn.classList.add('filter-active');
+  }
+}
+
+function _populateDropdown(wrapper) {
+  const col = parseInt(wrapper.dataset.col, 10);
+  const tableKey = wrapper.dataset.table;
+  const filtersMap = tableKey === 'schedule' ? schedFilters : resultsFilters;
+  const allowed = filtersMap.get(col);
+  const values = _getColValues(tableKey, col);
+  const menu = wrapper.querySelector('.th-filter-menu');
+  menu.innerHTML = '';
+
+  // Opção "Todos"
+  const allLabel = document.createElement('label');
+  allLabel.className = 'th-filter-option';
+  const allCb = document.createElement('input');
+  allCb.type = 'checkbox';
+  allCb.dataset.value = '__all__';
+  allCb.checked = !allowed || allowed.size === 0;
+  allLabel.append(allCb, ' (Todos)');
+  menu.appendChild(allLabel);
+
+  const sortedVals = [...values].sort((a, b) => a.localeCompare(b, 'pt-BR', { numeric: true }));
+  sortedVals.forEach(v => {
+    const lbl = document.createElement('label');
+    lbl.className = 'th-filter-option';
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.dataset.value = v;
+    cb.checked = !allowed || allowed.size === 0 || allowed.has(v);
+    lbl.append(cb, ' ' + v);
+    menu.appendChild(lbl);
+  });
+
+  menu.querySelectorAll('input[type=checkbox]').forEach(cb => {
+    cb.addEventListener('change', (e) => _onDropdownChange(e, wrapper, menu, col, tableKey, filtersMap));
+  });
+}
+
+function _onDropdownChange(e, wrapper, menu, col, tableKey, filtersMap) {
+  const allCb = menu.querySelector('input[data-value="__all__"]');
+  const itemCbs = [...menu.querySelectorAll('input:not([data-value="__all__"])')]; 
+  if (e.target === allCb) {
+    itemCbs.forEach(c => c.checked = allCb.checked);
+    if (allCb.checked) filtersMap.delete(col);
+    else filtersMap.set(col, new Set());
+  } else {
+    const checkedVals = itemCbs.filter(c => c.checked).map(c => c.dataset.value);
+    const allChecked = checkedVals.length === itemCbs.length;
+    allCb.checked = allChecked;
+    if (allChecked) filtersMap.delete(col);
+    else filtersMap.set(col, new Set(checkedVals));
+  }
+  _updateFilterBtnLabel(wrapper);
+  if (tableKey === 'schedule') { schedPagination.page = 0; renderScheduleTable(); }
+  else renderResultsTable();
+}
+
+document.querySelectorAll('.th-dropdown-filter').forEach(wrapper => {
+  const btn = wrapper.querySelector('.th-filter-btn');
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const menu = wrapper.querySelector('.th-filter-menu');
+    const isOpen = !menu.classList.contains('hidden');
+    document.querySelectorAll('.th-filter-menu').forEach(m => m.classList.add('hidden'));
+    if (!isOpen) {
+      _populateDropdown(wrapper);
+      menu.classList.remove('hidden');
+    }
   });
 });
 
-document.querySelectorAll('.th-filter[data-table="results"]').forEach(input => {
-  input.addEventListener('input', () => {
-    resultsFilters[input.dataset.col] = input.value;
-    renderResultsTable();
-  });
+document.addEventListener('click', () => {
+  document.querySelectorAll('.th-filter-menu').forEach(m => m.classList.add('hidden'));
 });
 
 // ── Tabela de Resultados ──────────────────────────────────────────────────────
 function _applyResultsFilter(data) {
+  if (resultsFilters.size === 0) return data;
   return data.filter(r => {
     const row = [
       r.scheduledTime,
@@ -416,12 +542,14 @@ function _applyResultsFilter(data) {
       r.galeRound > 0 ? `G${r.galeRound}` : '—',
       r.won ? 'WIN' : 'LOSS',
       `${r.profit >= 0 ? '+' : ''}$${parseFloat(r.profit).toFixed(2)}`,
+      r.payout || '—',
     ];
-    return Object.entries(resultsFilters).every(([col, val]) => {
-      if (!val) return true;
-      const cell = row[parseInt(col, 10)] || '';
-      return cell.toLowerCase().includes(val.toLowerCase());
-    });
+    for (const [col, allowed] of resultsFilters) {
+      if (!allowed || allowed.size === 0) continue;
+      const cell = row[parseInt(col, 10)] || '—';
+      if (!allowed.has(cell)) return false;
+    }
+    return true;
   });
 }
 
@@ -438,12 +566,13 @@ function renderResultsTable() {
   const sorted   = _applyResultsSort(filtered);
 
   elResultsBody.innerHTML = '';
-  sorted.forEach(r => {
+  sorted.forEach((r, i) => {
     const tr = document.createElement('tr');
     tr.className = r.won ? 'win' : 'loss';
     const profitClass = r.profit >= 0 ? 'profit-positive' : 'profit-negative';
     const dirClass    = r.direction === 'CALL' ? 'direction-call' : 'direction-put';
     tr.innerHTML =
+      `<td class="idx-cell">${i + 1}</td>` +
       `<td>${escapeHtml(r.scheduledTime)}</td>` +
       `<td>${escapeHtml(r.rawSymbol)}</td>` +
       `<td class="${dirClass}">${r.direction === 'CALL' ? '⬆️ CALL' : '⬇️ PUT'}</td>` +
@@ -451,12 +580,13 @@ function renderResultsTable() {
       `<td>$${parseFloat(r.stake).toFixed(2)}</td>` +
       `<td>${r.galeRound > 0 ? 'G' + r.galeRound : '—'}</td>` +
       `<td>${r.won ? '✅ WIN' : '❌ LOSS'}</td>` +
-      `<td class="${profitClass}">${r.profit >= 0 ? '+' : ''}$${parseFloat(r.profit).toFixed(2)}</td>`;
+      `<td class="${profitClass}">${r.profit >= 0 ? '+' : ''}$${parseFloat(r.profit).toFixed(2)}</td>` +
+      `<td>${escapeHtml(r.payout || '—')}</td>`;
     elResultsBody.appendChild(tr);
   });
 }
 
-function addResultRow({ signal, won, profit, stake, galeRound }) {
+function addResultRow({ signal, won, profit, stake, galeRound, payoutPct }) {
   const scheduledTime = new Date(signal.scheduledAt).toLocaleTimeString('pt-BR', {
     hour: '2-digit', minute: '2-digit',
   });
@@ -470,13 +600,91 @@ function addResultRow({ signal, won, profit, stake, galeRound }) {
     galeRound,
     won,
     profit,
+    payout: payoutPct || '—',
   });
 
   renderResultsTable();
+  renderReportSummary();
   saveResults();
 }
 
-// ── localStorage ───────────────────────────────────────────────────────────
+// ── Relatório: Resumo ─────────────────────────────────────────────────────────
+function renderReportSummary() {
+  const total = _resultRows.length;
+  const wins  = _resultRows.filter(r => r.won).length;
+  const winRate = total > 0 ? ((wins / total) * 100).toFixed(1) + '%' : '—';
+  const profit  = _resultRows.reduce((acc, r) => acc + parseFloat(r.profit || 0), 0);
+
+  let maxWinStreak = 0, curWin = 0;
+  let maxLossStreak = 0, curLoss = 0;
+  [..._resultRows].reverse().forEach(r => {
+    if (r.won) { curWin++; curLoss = 0; maxWinStreak  = Math.max(maxWinStreak,  curWin); }
+    else       { curLoss++; curWin = 0; maxLossStreak = Math.max(maxLossStreak, curLoss); }
+  });
+
+  const repWinrate = $('rep-winrate');
+  const repTotal   = $('rep-total');
+  const repProfit  = $('rep-profit');
+  const repStrW    = $('rep-streak-win');
+  const repStrL    = $('rep-streak-loss');
+  const repG1      = $('rep-g1');
+  const repG2      = $('rep-g2');
+
+  const g1Count = _resultRows.filter(r => r.galeRound === 1).length;
+  const g2Count = _resultRows.filter(r => r.galeRound === 2).length;
+
+  if (repWinrate) repWinrate.textContent = winRate;
+  if (repTotal)   repTotal.textContent   = total;
+  if (repProfit) {
+    repProfit.textContent = `${profit >= 0 ? '+' : ''}$${Math.abs(profit).toFixed(2)}`;
+    repProfit.className   = 'stat-value ' + (profit >= 0 ? 'green' : 'red');
+  }
+  if (repStrW) repStrW.textContent = maxWinStreak;
+  if (repStrL) repStrL.textContent = maxLossStreak;
+  if (repG1)   repG1.textContent   = g1Count;
+  if (repG2)   repG2.textContent   = g2Count;
+}
+
+// ── Exportar CSV ──────────────────────────────────────────────────────────────
+$('btn-export-csv')?.addEventListener('click', () => {
+  if (_resultRows.length === 0) return addLog('⚠️ Sem resultados para exportar.', 'warn');
+  const headers = ['#', 'Horário', 'Par', 'Direção', 'Duração', 'Stake', 'Gale', 'Resultado', 'Lucro', 'Payout %'];
+  const rows = [..._resultRows].reverse().map((r, i) => [
+    i + 1,
+    r.scheduledTime,
+    r.rawSymbol,
+    r.direction,
+    r.duration,
+    r.stake,
+    r.galeRound > 0 ? `G${r.galeRound}` : '—',
+    r.won ? 'WIN' : 'LOSS',
+    `${r.profit >= 0 ? '+' : ''}${parseFloat(r.profit).toFixed(2)}`,
+    r.payout || '—',
+  ]);
+  const csv = [headers, ...rows]
+    .map(row => row.map(v => `"${String(v).replace(/"/g, '""')}"`).join(','))
+    .join('\n');
+  const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `eltoro-resultados-${new Date().toISOString().slice(0, 10)}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+  addLog('📥 CSV exportado com sucesso.', 'success');
+});
+
+// ── Navegação por Abas ────────────────────────────────────────────────────────
+document.querySelectorAll('.tab-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.tab-panel').forEach(p => p.classList.add('hidden'));
+    btn.classList.add('active');
+    const panel = $(btn.dataset.tab);
+    if (panel) panel.classList.remove('hidden');
+  });
+});
+
 const LS = {
   FORM:     'eltoro_form',
   STATS:    'eltoro_stats',
@@ -493,6 +701,9 @@ function saveForm() {
       accountId:   $('input-accountid')?.value || '',
       stake:       $('input-stake')?.value  || '1',
       maxGales:    $('input-maxgales')?.value || '1',
+      stopLoss:    $('input-stoploss')?.value  || '0',
+      takeProfit:  $('input-takeprofit')?.value || '0',
+      minPayout:   $('input-minpayout')?.value  || '0',
       signalsText: $('input-signals')?.value || '',
       date:        $('input-date')?.value   || '',
     }));
@@ -506,6 +717,7 @@ function saveStats() {
       losses:         state.losses,
       totalProfit:    state.totalProfit,
       totalScheduled: state.totalScheduled,
+      statsDate:      new Date().toISOString().slice(0, 10),
     }));
   } catch (_) {}
 }
@@ -537,6 +749,9 @@ function restoreState() {
       if (form.accountId)    $('input-accountid').value  = form.accountId;
       if (form.stake)        $('input-stake').value      = form.stake;
       if (form.maxGales)     $('input-maxgales').value   = form.maxGales;
+      if (form.stopLoss != null)   $('input-stoploss').value    = form.stopLoss;
+      if (form.takeProfit != null) $('input-takeprofit').value  = form.takeProfit;
+      if (form.minPayout != null)  $('input-minpayout').value   = form.minPayout;
       if (form.signalsText)  $('input-signals').value    = form.signalsText;
       if (form.date)         $('input-date').value       = form.date;
     }
@@ -545,10 +760,16 @@ function restoreState() {
   try {
     const stats = JSON.parse(localStorage.getItem(LS.STATS) || 'null');
     if (stats) {
-      state.wins           = stats.wins           || 0;
-      state.losses         = stats.losses         || 0;
-      state.totalProfit    = stats.totalProfit    || 0;
-      state.totalScheduled = stats.totalScheduled || 0;
+      const today = new Date().toISOString().slice(0, 10);
+      if (stats.statsDate && stats.statsDate !== today) {
+        // Novo dia: zera as stats diárias
+        state.wins = 0; state.losses = 0; state.totalProfit = 0; state.totalScheduled = 0;
+      } else {
+        state.wins           = stats.wins           || 0;
+        state.losses         = stats.losses         || 0;
+        state.totalProfit    = stats.totalProfit    || 0;
+        state.totalScheduled = stats.totalScheduled || 0;
+      }
     }
   } catch (_) {}
 
@@ -568,6 +789,7 @@ function restoreState() {
     const results = JSON.parse(localStorage.getItem(LS.RESULTS) || '[]');
     results.forEach(r => _resultRows.push(r));
     renderResultsTable();
+    renderReportSummary();
   } catch (_) {}
 
   try {
@@ -590,6 +812,8 @@ elFormConfig.addEventListener('submit', (e) => {
   const accountId = ($('input-accountid')?.value || '').trim() || undefined;
   const stake     = parseFloat($('input-stake').value) || 1;
   const maxGales  = parseInt($('input-maxgales').value, 10) || 0;
+  const stopLoss  = parseFloat($('input-stoploss')?.value) || 0;
+  const takeProfit = parseFloat($('input-takeprofit')?.value) || 0;
 
   if (!token) return addLog('⚠️ Informe o Token da API.', 'warn');
   if (!appId)  return addLog('⚠️ Informe o App ID.', 'warn');
@@ -605,7 +829,7 @@ elFormConfig.addEventListener('submit', (e) => {
   }
 
   addLog('🔌 Conectando à Deriv...', 'muted');
-  socket.emit('config:connect', { token, appId, accountId, stake, maxGales });
+  socket.emit('config:connect', { token, appId, accountId, stake, maxGales, stopLoss, takeProfit });
 });
 
 elBtnDisconnect.addEventListener('click', () => {
@@ -635,8 +859,11 @@ elFormSignals.addEventListener('submit', (e) => {
 
   const [y, m, d] = date.split('-');
   const dateFormatted = `${d}/${m}/${y}`;
+  const stopLoss   = parseFloat($('input-stoploss')?.value) || 0;
+  const takeProfit = parseFloat($('input-takeprofit')?.value) || 0;
 
-  socket.emit('signals:submit', { signalsText, date: dateFormatted, stake, maxGales });
+  const minPayout = parseFloat($('input-minpayout')?.value) || 0;
+  socket.emit('signals:submit', { signalsText, date: dateFormatted, stake, maxGales, stopLoss, takeProfit, minPayout });
 });
 
 elBtnCancelAll.addEventListener('click', () => {
@@ -655,7 +882,7 @@ elScheduleBody.addEventListener('click', (e) => {
 });
 
 // ── Persistência de formulário ────────────────────────────────────────────
-['input-token', 'input-appid', 'input-accountid', 'input-stake', 'input-maxgales'].forEach(id => {
+['input-token', 'input-appid', 'input-accountid', 'input-stake', 'input-maxgales', 'input-stoploss', 'input-takeprofit', 'input-minpayout'].forEach(id => {
   $(id)?.addEventListener('input', saveForm);
 });
 $('input-signals')?.addEventListener('input', saveForm);
@@ -671,6 +898,7 @@ socket.on('connection:status', (data) => {
     $('acc-loginid').textContent = account.loginid;
     $('acc-type').textContent    = account.is_virtual ? '🎮 Demo' : '💵 Real';
     $('acc-balance').textContent = `$${parseFloat(balance.amount).toFixed(2)} ${balance.currency}`;
+    updateBalance(balance.amount, balance.currency);
     elSectionAccount.classList.remove('hidden');
 
     const others = (account.accountList || []).filter(a => a.loginid !== account.loginid);
@@ -708,6 +936,34 @@ socket.on('trade:bought', (data) => {
 
 socket.on('trade:update', (_data) => {});
 
+socket.on('trade:payout', ({ signalId, payoutPct }) => {
+  const entry = _scheduleData.find(d => d.id === signalId);
+  if (entry) entry.payout = `${payoutPct.toFixed(1)}%`;
+  const tr = scheduleRows.get(signalId);
+  if (tr) {
+    const cell = tr.querySelector('.sch-payout-cell');
+    if (cell) cell.textContent = `${payoutPct.toFixed(1)}%`;
+  }
+});
+
+socket.on('balance:update', ({ amount, currency }) => {
+  updateBalance(amount, currency);
+  const accBalEl = $('acc-balance');
+  if (accBalEl && state.connected) {
+    accBalEl.textContent = `$${parseFloat(amount).toFixed(2)} ${currency}`;
+  }
+});
+
+socket.on('trade:sl_hit', (data) => {
+  addLog(data.message, 'warn');
+  playSound('loss');
+});
+
+socket.on('trade:tp_hit', (data) => {
+  addLog(data.message, 'success');
+  playSound('win');
+});
+
 socket.on('trade:result', (data) => {
   const type = data.won ? 'success' : 'error';
   addLog(data.message, type);
@@ -724,8 +980,11 @@ socket.on('trade:result', (data) => {
     state.totalProfit += data.profit;
   }
 
+  const schEntry = _scheduleData.find(d => d.id === data.signal.id);
+  const payoutPct = schEntry?.payout || '—';
+
   removeScheduleRow(data.signal.id);
-  addResultRow(data);
+  addResultRow({ ...data, payoutPct });
   updateStats();
 });
 
@@ -764,6 +1023,42 @@ socket.on('error', (data) => {
 socket.on('trade:error', (data) => {
   addLog(data.message, 'error');
   if (data.signal?.id) updateScheduleStatus(data.signal.id, 'expired');
+});
+
+socket.on('trade:skipped', (data) => {
+  addLog(data.message, 'warn');
+  if (data.signal?.id) updateScheduleStatus(data.signal.id, 'cancelled');
+});
+
+// ── Reset de Dados ───────────────────────────────────────────────────────────
+$('btn-reset-data')?.addEventListener('click', () => {
+  if (!confirm('Tem certeza? Isso apagará todos os resultados, agendamentos, estatísticas e log. A configuração de conexão será mantida.')) return;
+
+  _resultRows.length = 0;
+  _scheduleData.length = 0;
+  _logEntries.length = 0;
+  scheduleRows.clear();
+
+  state.wins = 0;
+  state.losses = 0;
+  state.totalProfit = 0;
+  state.totalScheduled = 0;
+
+  localStorage.removeItem(LS.RESULTS);
+  localStorage.removeItem(LS.SCHEDULE);
+  localStorage.removeItem(LS.LOG);
+  localStorage.removeItem(LS.STATS);
+
+  elResultsBody.innerHTML = '';
+  elScheduleBody.innerHTML = '';
+  elLog.innerHTML = '';
+
+  renderScheduleTable();
+  renderResultsTable();
+  renderReportSummary();
+  updateStats();
+
+  addLog('🗑️ Todos os dados foram resetados.', 'warn');
 });
 
 // ── Inicialização ─────────────────────────────────────────────────────────────

@@ -13,6 +13,10 @@ class Scheduler {
     this._emit = null;
     this._derivClient = null;
     this._galeManager = null;
+    this.slAmount = 0;
+    this.tpAmount = 0;
+    this.minPayout = 0;
+    this._sessionProfit = 0;
   }
 
   /**
@@ -21,10 +25,13 @@ class Scheduler {
    * @param {GaleManager}  galeManager
    * @param {Function}     emit         Função para emitir eventos ao cliente Socket.io
    */
-  init(derivClient, galeManager, emit) {
+  init(derivClient, galeManager, emit, slAmount = 0, tpAmount = 0) {
     this._derivClient = derivClient;
     this._galeManager = galeManager;
     this._emit = emit;
+    this.slAmount = parseFloat(slAmount) || 0;
+    this.tpAmount = parseFloat(tpAmount) || 0;
+    this._sessionProfit = 0;
   }
 
   /** Reseta o scheduler sem emitir eventos (usado em reconexão). */
@@ -191,6 +198,24 @@ class Scheduler {
   async _executeTrade(signal, stake, galeRound) {
     const label = galeRound === 0 ? 'Entrada' : `Gale ${galeRound}`;
 
+    // ── Verificação de Stop Loss / Take Profit ───────────────────────────
+    if (this.slAmount > 0 && this._sessionProfit <= -Math.abs(this.slAmount)) {
+      this._emit('trade:sl_hit', {
+        signal,
+        message: `🛑 Stop Loss atingido! Prejuízo acumulado: -$${Math.abs(this._sessionProfit).toFixed(2)}. Agendamentos cancelados.`,
+      });
+      this.cancelAll();
+      return;
+    }
+    if (this.tpAmount > 0 && this._sessionProfit >= Math.abs(this.tpAmount)) {
+      this._emit('trade:tp_hit', {
+        signal,
+        message: `🎯 Take Profit atingido! Lucro acumulado: +$${this._sessionProfit.toFixed(2)}. Agendamentos cancelados.`,
+      });
+      this.cancelAll();
+      return;
+    }
+
     // Se WebSocket caiu, tenta reconectar antes de executar
     if (!this._derivClient?.isConnected) {
       try {
@@ -235,6 +260,24 @@ class Scheduler {
         currency,
       });
 
+      // Payout %
+      let payoutPct = null;
+      if (proposalData.payout != null && proposalData.ask_price > 0) {
+        payoutPct = ((proposalData.payout / proposalData.ask_price) - 1) * 100;
+        this._emit('trade:payout', { signalId: signal.id, payoutPct });
+      }
+
+      // Filtro de Payout mínimo
+      if (this.minPayout > 0 && payoutPct !== null && payoutPct < this.minPayout) {
+        this._emit('trade:skipped', {
+          signal,
+          payoutPct,
+          minPayout: this.minPayout,
+          message: `⏩ Ignorado: ${signal.rawSymbol} — Payout ${payoutPct.toFixed(1)}% < mínimo ${this.minPayout}%`,
+        });
+        return;
+      }
+
       // 2. Comprar
       const buyResult = await this._derivClient.buy(proposalData.id, proposalData.ask_price);
 
@@ -268,6 +311,9 @@ class Scheduler {
       const galeDecision = this._galeManager.onResult(signal.id, won);
       const isFinal = won || !galeDecision.shouldGale;
 
+      // Acumula lucro/prejuízo da sessão (para SL/TP)
+      if (isFinal) this._sessionProfit = parseFloat((this._sessionProfit + profit).toFixed(2));
+
       this._emit('trade:result', {
         signal,
         won,
@@ -280,6 +326,14 @@ class Scheduler {
           ? `🏆 WIN ${label}: ${signal.rawSymbol} | Lucro: $${Math.abs(profit).toFixed(2)}`
           : `❌ LOSS ${label}: ${signal.rawSymbol} | Prejuízo: -$${Math.abs(profit).toFixed(2)}`,
       });
+
+      // Busca saldo atualizado após resultado final
+      if (isFinal && this._derivClient?.isConnected) {
+        try {
+          const bal = await this._derivClient.getBalance();
+          this._emit('balance:update', { amount: bal.balance, currency: bal.currency });
+        } catch (_) {}
+      }
 
       if (!won && galeDecision.shouldGale) {
         // Aguarda 1 segundo antes de entrar no gale

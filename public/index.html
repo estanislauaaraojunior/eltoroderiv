@@ -21,75 +21,6 @@
     <!-- ── COLUNA ESQUERDA ── -->
     <aside class="sidebar">
 
-      <!-- Configuração de Conexão -->
-      <section class="card" id="section-config">
-        <h2>⚙️ Configuração</h2>
-        <form id="form-config">
-          <label>
-            Token da API Deriv
-            <input type="password" id="input-token" placeholder="Cole aqui o seu API token" required />
-          </label>
-          <details class="help-details">
-            <summary>Como gerar o token?</summary>
-            <p><strong>Nova API (developers.deriv.com)</strong> — tokens <code>pat_xxx</code>:</p>
-            <ol class="help-steps">
-              <li>Acesse <a href="https://developers.deriv.com" target="_blank" rel="noopener">developers.deriv.com</a> e faça login</li>
-              <li>Vá em <strong>Profile → API tokens</strong></li>
-              <li>Crie um token PAT com permissão <strong>Trade</strong></li>
-              <li>O token começa com <code>pat_</code> — copie e cole aqui</li>
-            </ol>
-            <p><strong>API Legada (legacy-api.deriv.com)</strong> — tokens <code>a1-xxx</code>:</p>
-            <ol class="help-steps">
-              <li>Acesse <a href="https://legacy-api.deriv.com" target="_blank" rel="noopener">legacy-api.deriv.com</a> e faça login</li>
-              <li>Crie um token com permissões <strong>Read</strong> e <strong>Trade</strong></li>
-              <li>O token começa com <code>a1-</code></li>
-            </ol>
-            <p class="help-warn">⚠️ Nunca compartilhe seu token com ninguém.</p>
-          </details>
-          <label>
-            App ID
-            <input type="text" id="input-appid" placeholder="App ID do seu app registrado" />
-            <small style="color:#888">Nova API (pat_): alphanumerico em developers.deriv.com · Legada (a1-): numérico em legacy-api.deriv.com</small>
-          </label>
-          <label>
-            ID da Conta <small style="color:#888">(opcional — nova API apenas)</small>
-            <input type="text" id="input-accountid" placeholder="Ex: DOT12345 ou DEM67890 (deixe em branco para auto)" />
-            <small style="color:#888">Deixe em branco para usar automaticamente a conta demo</small>
-          </label>
-          <hr class="separator" />
-          <label>
-            Stake inicial (USD)
-            <input type="number" id="input-stake" value="1" min="0.35" step="0.01" />
-          </label>
-          <label>
-            Máx. de Gales
-            <input type="number" id="input-maxgales" value="1" min="0" max="10" step="1" />
-          </label>
-          <button type="submit" id="btn-connect" class="btn btn-primary">Conectar</button>
-          <button type="button" id="btn-disconnect" class="btn btn-secondary" disabled>Desconectar</button>
-        </form>
-      </section>
-
-      <!-- Info da Conta -->
-      <section class="card hidden" id="section-account">
-        <h2>👤 Conta</h2>
-        <div id="account-info">
-          <p><span class="label">Login ID:</span> <strong id="acc-loginid">—</strong></p>
-          <p><span class="label">Tipo:</span> <strong id="acc-type">—</strong></p>
-          <p><span class="label">Saldo:</span> <strong id="acc-balance">—</strong></p>
-        </div>
-        <div id="account-switch-section" class="hidden">
-          <hr class="separator" />
-          <p class="label">Trocar de Conta</p>
-          <select id="select-account"></select>
-          <label id="label-switch-token">
-            Token da Conta Selecionada <small>(só para API legada)</small>
-            <input type="password" id="input-switch-token" placeholder="Token da conta (deixe vazio para nova API)" />
-          </label>
-          <button type="button" id="btn-switch" class="btn btn-secondary">Trocar</button>
-        </div>
-      </section>
-
       <!-- Sinais -->
       <section class="card">
         <h2>📋 Sinais</h2>
@@ -106,6 +37,26 @@
               placeholder="Cole aqui a lista de sinais:&#10;&#10;M5;USDJPY;15:05;CALL&#10;M5;USDJPY;15:25;PUT&#10;M5;EURUSD;16:00;CALL"
             ></textarea>
           </label>
+          <label>
+            Stake inicial (USD)
+            <input type="number" id="input-stake" value="1" min="0.35" step="0.01" />
+          </label>
+          <label>
+            Máx. de Gales
+            <input type="number" id="input-maxgales" value="1" min="0" max="10" step="1" />
+          </label>
+          <label>
+            Stop Loss (USD) <small style="color:#888">(0 = desativado)</small>
+            <input type="number" id="input-stoploss" value="0" min="0" step="0.01" />
+          </label>
+          <label>
+            Take Profit (USD) <small style="color:#888">(0 = desativado)</small>
+            <input type="number" id="input-takeprofit" value="0" min="0" step="0.01" />
+          </label>
+          <label>
+            Payout mínimo (%) <small style="color:#888">(0 = desativado)</small>
+            <input type="number" id="input-minpayout" value="0" min="0" max="100" step="0.1" />
+          </label>
           <div class="btn-row">
             <button type="submit" id="btn-schedule" class="btn btn-success" disabled>Agendar</button>
             <button type="button" id="btn-clear-signals" class="btn btn-secondary">Limpar</button>
@@ -119,83 +70,215 @@
     <!-- ── COLUNA DIREITA ── -->
     <div class="content">
 
-      <!-- Resumo -->
-      <section class="card stats-row">
-        <div class="stat">
-          <span class="stat-value" id="stat-total">0</span>
-          <span class="stat-label">Agendados</span>
-        </div>
-        <div class="stat">
-          <span class="stat-value green" id="stat-wins">0</span>
-          <span class="stat-label">Wins</span>
-        </div>
-        <div class="stat">
-          <span class="stat-value red" id="stat-losses">0</span>
-          <span class="stat-label">Losses</span>
-        </div>
-        <div class="stat">
-          <span class="stat-value" id="stat-profit">$0.00</span>
-          <span class="stat-label">Lucro / Prejuízo</span>
-        </div>
-      </section>
+      <!-- Nav de Abas -->
+      <nav class="tabs-nav">
+        <button class="tab-btn active" data-tab="panel-inicio">🏠 Início</button>
+        <button class="tab-btn" data-tab="panel-relatorios">📊 Relatórios</button>
+        <button class="tab-btn" data-tab="panel-configuracoes">⚙️ Configurações</button>
+      </nav>
 
-      <!-- Tabela de Agendamentos -->
-      <section class="card">
-        <h2>📅 Agendamentos</h2>
-        <div class="table-wrapper">
-          <table id="schedule-table">
-            <thead>
-              <tr>
-                <th><div class="th-label">Horário <span class="sort-btn" id="sort-sch-time" title="Ordenar por Horário">⇅</span></div><input type="text" class="th-filter" data-table="schedule" data-col="0" placeholder="Filtrar..."></th>
-                <th><div class="th-label">Par</div><input type="text" class="th-filter" data-table="schedule" data-col="1" placeholder="Filtrar..."></th>
-                <th><div class="th-label">Direção</div><input type="text" class="th-filter" data-table="schedule" data-col="2" placeholder="Filtrar..."></th>
-                <th><div class="th-label">Duração</div><input type="text" class="th-filter" data-table="schedule" data-col="3" placeholder="Filtrar..."></th>
-                <th><div class="th-label">Stake</div><input type="text" class="th-filter" data-table="schedule" data-col="4" placeholder="Filtrar..."></th>
-                <th><div class="th-label">Gale</div><input type="text" class="th-filter" data-table="schedule" data-col="5" placeholder="Filtrar..."></th>
-                <th><div class="th-label">Status</div><input type="text" class="th-filter" data-table="schedule" data-col="6" placeholder="Filtrar..."></th>
-                <th>Ações</th>
-              </tr>
-            </thead>
-            <tbody id="schedule-body"></tbody>
-          </table>
-        </div>
-        <div id="schedule-pagination" class="pagination hidden">
-          <button id="sch-prev" class="btn btn-ghost">◀ Anterior</button>
-          <span id="sch-page-info">Página 1 de 1</span>
-          <button id="sch-next" class="btn btn-ghost">Próxima ▶</button>
-        </div>
-      </section>
+      <!-- ── ABA: INÍCIO ── -->
+      <div id="panel-inicio" class="tab-panel">
 
-      <!-- Tabela de Resultados -->
-      <section class="card">
-        <h2>📊 Resultados</h2>
-        <div class="table-wrapper">
-          <table id="results-table">
-            <thead>
-              <tr>
-                <th><div class="th-label">Horário <span class="sort-btn" id="sort-res-time" title="Ordenar por Horário">⇅</span></div><input type="text" class="th-filter" data-table="results" data-col="0" placeholder="Filtrar..."></th>
-                <th><div class="th-label">Par</div><input type="text" class="th-filter" data-table="results" data-col="1" placeholder="Filtrar..."></th>
-                <th><div class="th-label">Direção</div><input type="text" class="th-filter" data-table="results" data-col="2" placeholder="Filtrar..."></th>
-                <th><div class="th-label">Duração</div><input type="text" class="th-filter" data-table="results" data-col="3" placeholder="Filtrar..."></th>
-                <th><div class="th-label">Stake</div><input type="text" class="th-filter" data-table="results" data-col="4" placeholder="Filtrar..."></th>
-                <th><div class="th-label">Gale</div><input type="text" class="th-filter" data-table="results" data-col="5" placeholder="Filtrar..."></th>
-                <th><div class="th-label">Resultado</div><input type="text" class="th-filter" data-table="results" data-col="6" placeholder="Filtrar..."></th>
-                <th><div class="th-label">Lucro</div><input type="text" class="th-filter" data-table="results" data-col="7" placeholder="Filtrar..."></th>
-              </tr>
-            </thead>
-            <tbody id="results-body"></tbody>
-          </table>
-        </div>
-      </section>
+        <!-- Resumo -->
+        <section class="card stats-row">
+          <div class="stat">
+            <span class="stat-value" id="stat-balance">—</span>
+            <span class="stat-label">Saldo</span>
+          </div>
+          <div class="stat">
+            <span class="stat-value" id="stat-total">0</span>
+            <span class="stat-label">Agendados</span>
+          </div>
+          <div class="stat">
+            <span class="stat-value green" id="stat-wins">0</span>
+            <span class="stat-label">Wins</span>
+          </div>
+          <div class="stat">
+            <span class="stat-value red" id="stat-losses">0</span>
+            <span class="stat-label">Losses</span>
+          </div>
+          <div class="stat">
+            <span class="stat-value" id="stat-profit">$0.00</span>
+            <span class="stat-label">Lucro / Prejuízo</span>
+          </div>
+        </section>
 
-      <!-- Log de Atividade -->
-      <section class="card">
-        <div class="card-header">
-          <h2>📡 Log de Atividade</h2>
-          <button type="button" id="btn-clear-log" class="btn btn-ghost">Limpar</button>
-        </div>
-        <div id="log" class="log-container"></div>
-      </section>
+        <!-- Tabela de Agendamentos -->
+        <section class="card">
+          <h2>📅 Agendamentos</h2>
+          <div class="table-wrapper">
+            <table id="schedule-table">
+              <thead>
+                <tr>
+                  <th class="col-idx">#</th>
+                  <th><div class="th-label">Horário <span class="sort-btn" id="sort-sch-time" title="Ordenar por Horário">⇅</span></div><div class="th-dropdown-filter" data-table="schedule" data-col="0"><button class="th-filter-btn" type="button">Todos ▾</button><div class="th-filter-menu hidden"></div></div></th>
+                  <th><div class="th-label">Par</div><div class="th-dropdown-filter" data-table="schedule" data-col="1"><button class="th-filter-btn" type="button">Todos ▾</button><div class="th-filter-menu hidden"></div></div></th>
+                  <th><div class="th-label">Direção</div><div class="th-dropdown-filter" data-table="schedule" data-col="2"><button class="th-filter-btn" type="button">Todos ▾</button><div class="th-filter-menu hidden"></div></div></th>
+                  <th><div class="th-label">Duração</div><div class="th-dropdown-filter" data-table="schedule" data-col="3"><button class="th-filter-btn" type="button">Todos ▾</button><div class="th-filter-menu hidden"></div></div></th>
+                  <th><div class="th-label">Stake</div><div class="th-dropdown-filter" data-table="schedule" data-col="4"><button class="th-filter-btn" type="button">Todos ▾</button><div class="th-filter-menu hidden"></div></div></th>
+                  <th><div class="th-label">Gale</div><div class="th-dropdown-filter" data-table="schedule" data-col="5"><button class="th-filter-btn" type="button">Todos ▾</button><div class="th-filter-menu hidden"></div></div></th>
+                  <th><div class="th-label">Status</div><div class="th-dropdown-filter" data-table="schedule" data-col="6"><button class="th-filter-btn" type="button">Todos ▾</button><div class="th-filter-menu hidden"></div></div></th>
+                  <th><div class="th-label">Payout %</div><div class="th-dropdown-filter" data-table="schedule" data-col="7"><button class="th-filter-btn" type="button">Todos ▾</button><div class="th-filter-menu hidden"></div></div></th>
+                  <th>Ações</th>
+                </tr>
+              </thead>
+              <tbody id="schedule-body"></tbody>
+            </table>
+          </div>
+          <div id="schedule-pagination" class="pagination hidden">
+            <button id="sch-prev" class="btn btn-ghost">◀ Anterior</button>
+            <span id="sch-page-info">Página 1 de 1</span>
+            <button id="sch-next" class="btn btn-ghost">Próxima ▶</button>
+          </div>
+        </section>
+
+        <!-- Log de Atividade -->
+        <section class="card">
+          <div class="card-header">
+            <h2>📡 Log de Atividade</h2>
+            <button type="button" id="btn-clear-log" class="btn btn-ghost">Limpar</button>
+          </div>
+          <div id="log" class="log-container"></div>
+        </section>
+
+      </div><!-- /panel-inicio -->
+
+      <!-- ── ABA: RELATÓRIOS ── -->
+      <div id="panel-relatorios" class="tab-panel hidden">
+
+        <!-- Cards de Resumo -->
+        <section class="card stats-row">
+          <div class="stat">
+            <span class="stat-value" id="rep-winrate">—</span>
+            <span class="stat-label">Win Rate</span>
+          </div>
+          <div class="stat">
+            <span class="stat-value" id="rep-total">0</span>
+            <span class="stat-label">Total Ops</span>
+          </div>
+          <div class="stat">
+            <span class="stat-value" id="rep-profit">$0.00</span>
+            <span class="stat-label">Lucro Líquido</span>
+          </div>
+          <div class="stat">
+            <span class="stat-value green" id="rep-streak-win">0</span>
+            <span class="stat-label">Maior Seq. Win</span>
+          </div>
+          <div class="stat">
+            <span class="stat-value red" id="rep-streak-loss">0</span>
+            <span class="stat-label">Maior Seq. Loss</span>
+          </div>
+          <div class="stat">
+            <span class="stat-value" id="rep-g1">0</span>
+            <span class="stat-label">G1 Usados</span>
+          </div>
+          <div class="stat">
+            <span class="stat-value" id="rep-g2">0</span>
+            <span class="stat-label">G2 Usados</span>
+          </div>
+        </section>
+
+        <!-- Tabela de Resultados -->
+        <section class="card">
+          <div class="card-header">
+            <h2>📊 Resultados</h2>
+            <button type="button" id="btn-export-csv" class="btn btn-ghost">⬇ Exportar CSV</button>
+          </div>
+          <div class="table-wrapper">
+            <table id="results-table">
+              <thead>
+                <tr>
+                  <th class="col-idx">#</th>
+                  <th><div class="th-label">Horário <span class="sort-btn" id="sort-res-time" title="Ordenar por Horário">⇅</span></div><div class="th-dropdown-filter" data-table="results" data-col="0"><button class="th-filter-btn" type="button">Todos ▾</button><div class="th-filter-menu hidden"></div></div></th>
+                  <th><div class="th-label">Par</div><div class="th-dropdown-filter" data-table="results" data-col="1"><button class="th-filter-btn" type="button">Todos ▾</button><div class="th-filter-menu hidden"></div></div></th>
+                  <th><div class="th-label">Direção</div><div class="th-dropdown-filter" data-table="results" data-col="2"><button class="th-filter-btn" type="button">Todos ▾</button><div class="th-filter-menu hidden"></div></div></th>
+                  <th><div class="th-label">Duração</div><div class="th-dropdown-filter" data-table="results" data-col="3"><button class="th-filter-btn" type="button">Todos ▾</button><div class="th-filter-menu hidden"></div></div></th>
+                  <th><div class="th-label">Stake</div><div class="th-dropdown-filter" data-table="results" data-col="4"><button class="th-filter-btn" type="button">Todos ▾</button><div class="th-filter-menu hidden"></div></div></th>
+                  <th><div class="th-label">Gale</div><div class="th-dropdown-filter" data-table="results" data-col="5"><button class="th-filter-btn" type="button">Todos ▾</button><div class="th-filter-menu hidden"></div></div></th>
+                  <th><div class="th-label">Resultado</div><div class="th-dropdown-filter" data-table="results" data-col="6"><button class="th-filter-btn" type="button">Todos ▾</button><div class="th-filter-menu hidden"></div></div></th>
+                  <th><div class="th-label">Lucro</div><div class="th-dropdown-filter" data-table="results" data-col="7"><button class="th-filter-btn" type="button">Todos ▾</button><div class="th-filter-menu hidden"></div></div></th>
+                  <th><div class="th-label">Payout %</div><div class="th-dropdown-filter" data-table="results" data-col="8"><button class="th-filter-btn" type="button">Todos ▾</button><div class="th-filter-menu hidden"></div></div></th>
+                </tr>
+              </thead>
+              <tbody id="results-body"></tbody>
+            </table>
+          </div>
+        </section>
+
+      </div><!-- /panel-relatorios -->
+
+      <!-- ── ABA: CONFIGURAÇÕES ── -->
+      <div id="panel-configuracoes" class="tab-panel hidden">
+
+        <!-- Configuração de Conexão -->
+        <section class="card" id="section-config">
+          <h2>⚙️ Configuração</h2>
+          <form id="form-config">
+            <label>
+              Token da API Deriv
+              <input type="password" id="input-token" placeholder="Cole aqui o seu API token" required />
+            </label>
+            <details class="help-details">
+              <summary>Como gerar o token?</summary>
+              <p><strong>Nova API (developers.deriv.com)</strong> — tokens <code>pat_xxx</code>:</p>
+              <ol class="help-steps">
+                <li>Acesse <a href="https://developers.deriv.com" target="_blank" rel="noopener">developers.deriv.com</a> e faça login</li>
+                <li>Vá em <strong>Profile → API tokens</strong></li>
+                <li>Crie um token PAT com permissão <strong>Trade</strong></li>
+                <li>O token começa com <code>pat_</code> — copie e cole aqui</li>
+              </ol>
+              <p><strong>API Legada (legacy-api.deriv.com)</strong> — tokens <code>a1-xxx</code>:</p>
+              <ol class="help-steps">
+                <li>Acesse <a href="https://legacy-api.deriv.com" target="_blank" rel="noopener">legacy-api.deriv.com</a> e faça login</li>
+                <li>Crie um token com permissões <strong>Read</strong> e <strong>Trade</strong></li>
+                <li>O token começa com <code>a1-</code></li>
+              </ol>
+              <p class="help-warn">⚠️ Nunca compartilhe seu token com ninguém.</p>
+            </details>
+            <label>
+              App ID
+              <input type="text" id="input-appid" placeholder="App ID do seu app registrado" />
+              <small style="color:#888">Nova API (pat_): alphanumerico em developers.deriv.com · Legada (a1-): numérico em legacy-api.deriv.com</small>
+            </label>
+            <label>
+              ID da Conta <small style="color:#888">(opcional — nova API apenas)</small>
+              <input type="text" id="input-accountid" placeholder="Ex: DOT12345 ou DEM67890 (deixe em branco para auto)" />
+              <small style="color:#888">Deixe em branco para usar automaticamente a conta demo</small>
+            </label>
+            <button type="submit" id="btn-connect" class="btn btn-primary">Conectar</button>
+            <button type="button" id="btn-disconnect" class="btn btn-secondary" disabled>Desconectar</button>
+          </form>
+        </section>
+
+        <!-- Info da Conta -->
+        <section class="card hidden" id="section-account">
+          <h2>👤 Conta</h2>
+          <div id="account-info">
+            <p><span class="label">Login ID:</span> <strong id="acc-loginid">—</strong></p>
+            <p><span class="label">Tipo:</span> <strong id="acc-type">—</strong></p>
+            <p><span class="label">Saldo:</span> <strong id="acc-balance">—</strong></p>
+          </div>
+          <div id="account-switch-section" class="hidden">
+            <hr class="separator" />
+            <p class="label">Trocar de Conta</p>
+            <select id="select-account"></select>
+            <label id="label-switch-token">
+              Token da Conta Selecionada <small>(só para API legada)</small>
+              <input type="password" id="input-switch-token" placeholder="Token da conta (deixe vazio para nova API)" />
+            </label>
+            <button type="button" id="btn-switch" class="btn btn-secondary">Trocar</button>
+          </div>
+        </section>
+
+        <!-- Reset de Dados -->
+        <section class="card">
+          <h2>🗑️ Resetar Dados</h2>
+          <p style="font-size:0.85rem;color:var(--text-muted);margin-bottom:12px;">Apaga permanentemente todos os resultados, agendamentos, estatísticas e log de atividade. A configuração de conexão (token, App ID) é mantida.</p>
+          <button type="button" id="btn-reset-data" class="btn btn-danger">⚠️ Apagar Todos os Dados</button>
+        </section>
+
+      </div><!-- /panel-configuracoes -->
 
     </div>
   </main>

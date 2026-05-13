@@ -53,7 +53,7 @@ io.on('connection', (socket) => {
 
   // ─── Conectar à Deriv ─────────────────────────────────────────────────────
 
-  socket.on('config:connect', async ({ token, appId, accountId, stake, maxGales }) => {
+  socket.on('config:connect', async ({ token, appId, accountId, stake, maxGales, stopLoss, takeProfit }) => {
     try {
       if (!token || typeof token !== 'string' || token.trim().length === 0) {
         return emit('error', { message: 'Token da API é obrigatório.' });
@@ -85,9 +85,7 @@ io.on('connection', (socket) => {
 
         // Inicializa gale e scheduler
         galeManager.init(stake || 1, maxGales || 0);
-        scheduler.init(derivClient, galeManager, emit);
-
-        // Saldo vem da lista de contas
+        scheduler.init(derivClient, galeManager, emit, stopLoss || 0, takeProfit || 0);
         const selAcc = accounts.find(a => a.account_id === selectedAccount.account_id);
         const balanceAmount = parseFloat(selAcc?.balance ?? 0);
         const currency = selAcc?.currency ?? 'USD';
@@ -123,9 +121,7 @@ io.on('connection', (socket) => {
 
         // Inicializa gale e scheduler
         galeManager.init(stake || 1, maxGales || 0);
-        scheduler.init(derivClient, galeManager, emit);
-
-        // Busca saldo
+        scheduler.init(derivClient, galeManager, emit, stopLoss || 0, takeProfit || 0);
         const balance = await derivClient.getBalance();
 
         emit('connection:status', {
@@ -206,7 +202,7 @@ io.on('connection', (socket) => {
 
   // ─── Submeter lista de sinais ─────────────────────────────────────────────
 
-  socket.on('signals:submit', ({ signalsText, date, stake, maxGales }) => {
+  socket.on('signals:submit', ({ signalsText, date, stake, maxGales, stopLoss, takeProfit, minPayout }) => {
     try {
       if (!derivClient?.isConnected) {
         return emit('error', { message: 'Conecte-se à Deriv antes de agendar sinais.' });
@@ -215,6 +211,9 @@ io.on('connection', (socket) => {
       // Atualiza stake/gale se fornecidos (sem cancelar agendamentos existentes)
       if (stake != null) galeManager.baseStake = parseFloat(stake) || galeManager.baseStake;
       if (maxGales != null) galeManager.maxGales = parseInt(maxGales, 10) >= 0 ? parseInt(maxGales, 10) : galeManager.maxGales;
+      if (stopLoss != null) scheduler.slAmount = parseFloat(stopLoss) || 0;
+      if (takeProfit != null) scheduler.tpAmount = parseFloat(takeProfit) || 0;
+      if (minPayout != null) scheduler.minPayout = parseFloat(minPayout) || 0;
 
       // Determina a data-base (usa a data enviada pelo cliente ou hoje)
       let baseDate;

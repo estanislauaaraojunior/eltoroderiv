@@ -306,8 +306,8 @@ td {
 
 tr:last-child td { border-bottom: none; }
 
-tr.win  td:nth-child(7) { color: var(--green); font-weight: 700; }
-tr.loss td:nth-child(7) { color: var(--red);   font-weight: 700; }
+tr.win  td:nth-child(8) { color: var(--green); font-weight: 700; }
+tr.loss td:nth-child(8) { color: var(--red);   font-weight: 700; }
 
 .direction-call { color: var(--green); font-weight: 700; }
 .direction-put  { color: var(--red);   font-weight: 700; }
@@ -458,6 +458,130 @@ th {
   color: var(--text-muted);
 }
 
+/* ── Filtros Dropdown nas colunas da tabela ──────────────────────────────── */
+.th-dropdown-filter {
+  position: relative;
+  margin-top: 4px;
+}
+
+.th-filter-btn {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-muted);
+  font-family: var(--font);
+  font-size: 0.7rem;
+  padding: 3px 6px;
+  width: 100%;
+  min-width: 60px;
+  cursor: pointer;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: border-color 0.15s, color 0.15s;
+}
+
+.th-filter-btn:hover {
+  border-color: var(--blue);
+  color: var(--text);
+}
+
+.th-filter-btn.filter-active {
+  border-color: var(--blue);
+  color: var(--blue);
+  background: rgba(59,130,246,0.1);
+}
+
+.th-filter-menu {
+  position: absolute;
+  top: calc(100% + 2px);
+  left: 0;
+  min-width: 150px;
+  max-height: 220px;
+  overflow-y: auto;
+  background: var(--bg-card2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+  z-index: 200;
+  padding: 4px 0;
+}
+
+.th-filter-option {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  font-size: 0.78rem;
+  color: var(--text);
+  cursor: pointer;
+  white-space: nowrap;
+  font-weight: normal;
+  text-transform: none;
+  letter-spacing: 0;
+  flex-direction: row;
+}
+
+.th-filter-option:hover { background: rgba(59,130,246,0.1); }
+
+.th-filter-option input[type=checkbox] {
+  width: auto;
+  min-width: auto;
+  padding: 0;
+  background: transparent;
+  border: 1px solid var(--border);
+  accent-color: var(--blue);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+/* ── Saldo na stats-row ─────────────────────────────────────────────────── */
+#stat-balance { font-size: 1.2rem; }
+/* ── Abas ────────────────────────────────────────────────────────────── */
+.tabs-nav {
+  display: flex;
+  gap: 2px;
+  border-bottom: 2px solid var(--border);
+  padding-bottom: 0;
+  margin-bottom: 4px;
+}
+
+.tab-btn {
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-family: var(--font);
+  font-size: 0.85rem;
+  font-weight: 600;
+  margin-bottom: -2px;
+  padding: 8px 18px;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.tab-btn:hover  { color: var(--text); }
+.tab-btn.active { border-bottom-color: var(--blue); color: var(--blue); }
+
+.tab-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* ── Coluna de índice nas tabelas ─────────────────────────────────── */
+.col-idx {
+  width: 36px;
+  text-align: center;
+}
+
+td.idx-cell {
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
 /* ── Responsividade ──────────────────────────────────────────────────────── */
 @media (max-width: 900px) {
   main {
