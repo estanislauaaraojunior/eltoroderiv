@@ -329,6 +329,7 @@ tr.loss td:nth-child(8) { color: var(--red);   font-weight: 700; }
 .status-done      { background: rgba(34,197,94,0.15);   color: var(--green);      border: 1px solid var(--green); }
 .status-cancelled { background: rgba(239,68,68,0.15);   color: var(--red);        border: 1px solid var(--red); }
 .status-expired   { background: rgba(122,132,153,0.15); color: var(--text-muted); border: 1px solid var(--border); }
+.status-rejected  { background: rgba(234,130,8,0.18);   color: #f97316;           border: 1px solid #f97316; }
 
 /* ── Texto de Ajuda ──────────────────────────────────────────────────────── */
 .help-text {

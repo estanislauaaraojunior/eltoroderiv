@@ -35,6 +35,7 @@ class DerivClient {
     this._ws = null;
     this._pending = new Map(); // req_id → { resolver, rejeitar, temporizador }
     this._subscriptions = new Map(); // subscription_id → função de retorno
+    this._subscriptionRejects = new Map(); // subscription_id → reject fn (para limpar ao fechar WS)
     this._reqId = 1;
     this._pingTimer = null;
     this._authorized = false;
@@ -238,6 +239,12 @@ class DerivClient {
           pending.reject(new Error(`WebSocket fechado (${code}): ${reason}`));
         }
         this._pending.clear();
+        // Rejeita subscrições ativas (contratos em andamento)
+        for (const [, rejectFn] of this._subscriptionRejects) {
+          rejectFn(new Error(`WebSocket fechado (${code})`));
+        }
+        this._subscriptionRejects.clear();
+        this._subscriptions.clear();
       });
     });
   }
@@ -423,6 +430,7 @@ class DerivClient {
 
           if (contract && contract.is_sold) {
             this._subscriptions.delete(res.subscription?.id);
+            this._subscriptionRejects.delete(res.subscription?.id);
             resolve(contract);
           } else {
             // Aguarda atualizações via subscription
@@ -432,9 +440,16 @@ class DerivClient {
                 if (onUpdate) onUpdate(update.proposal_open_contract);
                 if (update.proposal_open_contract?.is_sold) {
                   this._subscriptions.delete(res.subscription.id);
+                  this._subscriptionRejects.delete(res.subscription.id);
                   clearTimeout(timer);
                   resolve(update.proposal_open_contract);
                 }
+              });
+              this._subscriptionRejects.set(res.subscription.id, (err) => {
+                this._subscriptions.delete(res.subscription.id);
+                this._subscriptionRejects.delete(res.subscription.id);
+                clearTimeout(timer);
+                reject(err);
               });
             }
           }
@@ -524,6 +539,21 @@ class DerivClient {
       clearInterval(this._pingTimer);
       this._pingTimer = null;
     }
+  }
+
+  /**
+   * Consulta o estado atual de um contrato sem criar subscription.
+   * Usado como fallback quando a subscription trava ou o WebSocket reconecta.
+   * @param {number} contractId
+   * @returns {Promise<object>} Dados do contrato (proposal_open_contract)
+   */
+  async checkContractStatus(contractId) {
+    const response = await this._send({
+      proposal_open_contract: 1,
+      contract_id: contractId,
+    }, DEFAULT_TIMEOUT_MS);
+    if (response.error) throw new Error(response.error.message);
+    return response.proposal_open_contract;
   }
 
   /**

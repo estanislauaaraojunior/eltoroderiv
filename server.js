@@ -8,6 +8,7 @@ const { Server } = require('socket.io');
 const DerivClient = require('./src/derivClient');
 const GaleManager = require('./src/galeManager');
 const Scheduler = require('./src/scheduler');
+const TelegramSignalSource = require('./src/telegramSignalSource');
 const { parseSignals } = require('./src/signalParser');
 
 const PORT = process.env.PORT || 3000;
@@ -19,6 +20,108 @@ const io = new Server(httpServer, {
 });
 
 app.use(express.static(path.join(__dirname, 'public')));
+
+const telegramSessions = new Map();
+
+function parseBaseDate(date) {
+  if (!date) {
+    const now = new Date();
+    now.setHours(0, 0, 0, 0);
+    return now;
+  }
+
+  const parts = date.includes('/') ? date.split('/').reverse() : date.split('-');
+  if (parts.length !== 3) return null;
+
+  const [year, month, day] = parts;
+  const parsed = new Date(`${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}T00:00:00`);
+  if (isNaN(parsed.getTime())) return null;
+  return parsed;
+}
+
+function scheduleSignalsForSession({
+  derivClient,
+  galeManager,
+  scheduler,
+  emit,
+  signalsText,
+  date,
+  stake,
+  maxGales,
+  stopLoss,
+  takeProfit,
+  minPayout,
+  source = 'manual',
+}) {
+  const fromTelegram = source === 'telegram';
+
+  if (!derivClient?.isConnected) {
+    if (!fromTelegram) {
+      emit('error', { message: 'Conecte-se à Deriv antes de agendar sinais.' });
+    }
+    return { ok: false, reason: 'not_connected' };
+  }
+
+  if (stake != null) galeManager.baseStake = parseFloat(stake) || galeManager.baseStake;
+  if (maxGales != null) {
+    const parsedMaxGales = parseInt(maxGales, 10);
+    galeManager.maxGales = parsedMaxGales >= 0 ? parsedMaxGales : galeManager.maxGales;
+  }
+  if (stopLoss != null) scheduler.slAmount = parseFloat(stopLoss) || 0;
+  if (takeProfit != null) scheduler.tpAmount = parseFloat(takeProfit) || 0;
+  if (minPayout != null) scheduler.minPayout = parseFloat(minPayout) || 0;
+
+  const baseDate = parseBaseDate(date);
+  if (!baseDate) {
+    emit('error', { message: 'Data inválida. Use o formato DD/MM/AAAA.' });
+    return { ok: false, reason: 'invalid_date' };
+  }
+
+  if (!signalsText || typeof signalsText !== 'string') {
+    const message = fromTelegram
+      ? 'Telegram recebido sem texto de sinal.'
+      : 'Nenhum sinal foi enviado.';
+    emit('error', { message });
+    return { ok: false, reason: 'empty_signals' };
+  }
+
+  const { signals, skipped } = parseSignals(signalsText, baseDate);
+  if (signals.length === 0) {
+    const message = fromTelegram
+      ? `Telegram recebido, mas nenhum sinal válido foi identificado. ${skipped} linha(s) ignorada(s).`
+      : `Nenhum sinal válido encontrado. ${skipped} linhas ignoradas.`;
+    emit('error', { message });
+    return { ok: false, reason: 'no_valid_signals', skipped };
+  }
+
+  const message = fromTelegram
+    ? `📨 Telegram: ${signals.length} sinal(is) identificado(s). ${skipped > 0 ? `${skipped} linha(s) ignorada(s).` : ''}`
+    : `📋 ${signals.length} sinal(is) identificado(s). ${skipped > 0 ? `${skipped} linha(s) ignorada(s).` : ''}`;
+
+  emit('signals:parsed', {
+    count: signals.length,
+    skipped,
+    source,
+    message,
+  });
+
+  scheduler.schedule(signals);
+  return { ok: true, count: signals.length, skipped };
+}
+
+const telegramBotToken = process.env.TELEGRAM_BOT_TOKEN?.trim();
+const telegramChatId = process.env.TELEGRAM_CHAT_ID?.trim();
+
+const telegramSource = telegramBotToken
+  ? new TelegramSignalSource({
+      botToken: telegramBotToken,
+      chatId: telegramChatId,
+      onLog: (level, msg) => {
+        const logger = level === 'error' ? console.error : console.log;
+        logger(`[Telegram] ${msg}`);
+      },
+    })
+  : null;
 
 // ─── Sessão por Socket ────────────────────────────────────────────────────────
 // Cada conexão Socket.io tem sua própria instância de DerivClient + state.
@@ -50,6 +153,18 @@ io.on('connection', (socket) => {
 
   /** Utilitário: emite evento ao socket que iniciou a ação */
   const emit = (event, data) => socket.emit(event, data);
+  const scheduleFromPayload = (payload) => scheduleSignalsForSession({
+    derivClient,
+    galeManager,
+    scheduler,
+    emit,
+    ...payload,
+  });
+
+  telegramSessions.set(socket.id, {
+    isConnected: () => !!derivClient?.isConnected,
+    scheduleFromPayload,
+  });
 
   // ─── Conectar à Deriv ─────────────────────────────────────────────────────
 
@@ -204,51 +319,16 @@ io.on('connection', (socket) => {
 
   socket.on('signals:submit', ({ signalsText, date, stake, maxGales, stopLoss, takeProfit, minPayout }) => {
     try {
-      if (!derivClient?.isConnected) {
-        return emit('error', { message: 'Conecte-se à Deriv antes de agendar sinais.' });
-      }
-
-      // Atualiza stake/gale se fornecidos (sem cancelar agendamentos existentes)
-      if (stake != null) galeManager.baseStake = parseFloat(stake) || galeManager.baseStake;
-      if (maxGales != null) galeManager.maxGales = parseInt(maxGales, 10) >= 0 ? parseInt(maxGales, 10) : galeManager.maxGales;
-      if (stopLoss != null) scheduler.slAmount = parseFloat(stopLoss) || 0;
-      if (takeProfit != null) scheduler.tpAmount = parseFloat(takeProfit) || 0;
-      if (minPayout != null) scheduler.minPayout = parseFloat(minPayout) || 0;
-
-      // Determina a data-base (usa a data enviada pelo cliente ou hoje)
-      let baseDate;
-      if (date) {
-        // Formato esperado: "DD/MM/YYYY" ou "YYYY-MM-DD"
-        const parts = date.includes('/') ? date.split('/').reverse() : date.split('-');
-        baseDate = new Date(`${parts[0]}-${parts[1].padStart(2, '0')}-${parts[2].padStart(2, '0')}T00:00:00`);
-      } else {
-        baseDate = new Date();
-        baseDate.setHours(0, 0, 0, 0);
-      }
-
-      if (isNaN(baseDate.getTime())) {
-        return emit('error', { message: 'Data inválida. Use o formato DD/MM/AAAA.' });
-      }
-
-      if (!signalsText || typeof signalsText !== 'string') {
-        return emit('error', { message: 'Nenhum sinal foi enviado.' });
-      }
-
-      const { signals, skipped } = parseSignals(signalsText, baseDate);
-
-      if (signals.length === 0) {
-        return emit('error', {
-          message: `Nenhum sinal válido encontrado. ${skipped} linhas ignoradas.`,
-        });
-      }
-
-      emit('signals:parsed', {
-        count: signals.length,
-        skipped,
-        message: `📋 ${signals.length} sinal(is) identificado(s). ${skipped > 0 ? `${skipped} linha(s) ignorada(s).` : ''}`,
+      scheduleFromPayload({
+        signalsText,
+        date,
+        stake,
+        maxGales,
+        stopLoss,
+        takeProfit,
+        minPayout,
+        source: 'manual',
       });
-
-      scheduler.schedule(signals);
     } catch (err) {
       console.error('[signals:submit] Erro:', err.message);
       emit('error', { message: `Erro ao processar sinais: ${err.message}` });
@@ -262,13 +342,58 @@ io.on('connection', (socket) => {
     galeManager.resetAll();
   });
 
-  // ─── Cancelar agendamento individual ─────────────────────────────────────
-
   socket.on('signal:cancel', ({ signalId }) => {
     if (!signalId || typeof signalId !== 'string') return;
     const cancelled = scheduler.cancelSignal(signalId);
     if (cancelled) {
       emit('signal:cancelled', { signalId, message: `🛑 Agendamento cancelado.` });
+    }
+  });
+
+  // ─── Re-agendar sinais pendentes após reconexão (refresh de página) ───────
+
+  socket.on('signals:reschedule', ({ signals, minPayout }) => {
+    try {
+      if (!derivClient?.isConnected) return;
+      if (!Array.isArray(signals) || signals.length === 0) return;
+
+      if (minPayout != null) scheduler.minPayout = parseFloat(minPayout) || 0;
+
+      const now = Date.now();
+      const parsedSignals = signals
+        .map(s => {
+          if (!s || typeof s !== 'object') return null;
+          const scheduledAt = new Date(s.scheduledAt);
+          if (isNaN(scheduledAt.getTime())) return null;
+          if (scheduledAt.getTime() <= now) return null;
+          const direction = (s.direction || '').toUpperCase();
+          if (direction !== 'CALL' && direction !== 'PUT') return null;
+          return {
+            id: s.id,
+            raw: s.raw || '',
+            symbol: s.symbol,
+            rawSymbol: s.rawSymbol,
+            duration: parseInt(s.duration, 10) || 5,
+            duration_unit: s.duration_unit || 'm',
+            scheduledAt,
+            direction,
+            contract_type: s.contract_type || direction,
+            signalIndex: s.signalIndex ?? null,
+            status: 'pending',
+          };
+        })
+        .filter(Boolean);
+
+      if (parsedSignals.length === 0) return;
+
+      emit('signals:reschedule:ack', {
+        count: parsedSignals.length,
+        message: `🔄 Re-agendando ${parsedSignals.length} sinal(is) pendente(s)...`,
+      });
+
+      scheduler.schedule(parsedSignals);
+    } catch (err) {
+      console.error('[signals:reschedule] Erro:', err.message);
     }
   });
 
@@ -289,6 +414,7 @@ io.on('connection', (socket) => {
 
   socket.on('disconnect', () => {
     console.log(`[-] Cliente desconectado: ${socket.id}`);
+    telegramSessions.delete(socket.id);
     if (healthCheckTimer) {
       clearInterval(healthCheckTimer);
       healthCheckTimer = null;
@@ -300,6 +426,35 @@ io.on('connection', (socket) => {
     }
   });
 });
+
+if (telegramSource) {
+  telegramSource.start(({ text, chatId, from, messageId }) => {
+    let delivered = 0;
+
+    for (const session of telegramSessions.values()) {
+      if (!session.isConnected()) continue;
+      const result = session.scheduleFromPayload({
+        signalsText: text,
+        source: 'telegram',
+      });
+      if (result.ok) delivered++;
+    }
+
+    if (delivered > 0) {
+      console.log(`[Telegram] Mensagem #${messageId} de ${from} (chat ${chatId}) aplicada em ${delivered} sessão(ões).`);
+    } else {
+      console.log(`[Telegram] Mensagem #${messageId} recebida, mas sem sessão Deriv conectada.`);
+    }
+  });
+} else {
+  console.log('[Telegram] Automação desativada. Defina TELEGRAM_BOT_TOKEN para ativar.');
+}
+
+const shutdown = () => {
+  if (telegramSource) telegramSource.stop();
+};
+process.on('SIGINT', shutdown);
+process.on('SIGTERM', shutdown);
 
 // ─── Iniciar servidor ─────────────────────────────────────────────────────────
 

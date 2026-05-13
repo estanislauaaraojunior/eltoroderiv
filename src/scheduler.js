@@ -289,8 +289,14 @@ class Scheduler {
         message: `✅ Ordem aberta: contrato #${buyResult.contract_id} | Pago: $${buyResult.buy_price}`,
       });
 
-      // 3. Aguardar resultado
-      const finalContract = await this._derivClient.subscribeContractResult(
+      // 3. Aguardar resultado — com fallback após duração do contrato + 2min buffer
+      const unitMs = { m: 60_000, h: 3_600_000, d: 86_400_000, s: 1_000 };
+      const contractDurationMs = signal.duration * (unitMs[signal.duration_unit] || 60_000);
+      const fallbackMs = contractDurationMs + 2 * 60_000;
+
+      let settled = false;
+
+      const subscribePromise = this._derivClient.subscribeContractResult(
         buyResult.contract_id,
         (update) => {
           if (!update.is_sold) {
@@ -302,7 +308,34 @@ class Scheduler {
             });
           }
         }
-      );
+      ).then(r => { settled = true; return r; });
+
+      const fallbackPromise = new Promise(async (resolve, reject) => {
+        await this._sleep(fallbackMs);
+        if (settled) return; // subscribePromise já resolveu
+        this._emit('trade:update', {
+          signal,
+          contractId: buyResult.contract_id,
+          message: `⚠️ Contrato #${buyResult.contract_id} (${signal.rawSymbol}) não finalizou — verificando resultado...`,
+        });
+        for (let i = 0; i < 6 && !settled; i++) {
+          await this._sleep(10_000);
+          if (settled) return;
+          try {
+            const status = await this._derivClient.checkContractStatus(buyResult.contract_id);
+            if (status?.is_sold) {
+              settled = true;
+              return resolve(status);
+            }
+          } catch (_) {}
+        }
+        if (!settled) {
+          settled = true;
+          reject(new Error(`Contrato #${buyResult.contract_id} não finalizou após verificações de fallback.`));
+        }
+      });
+
+      const finalContract = await Promise.race([subscribePromise, fallbackPromise]);
 
       const won = finalContract.profit >= 0;
       const profit = parseFloat(finalContract.profit);

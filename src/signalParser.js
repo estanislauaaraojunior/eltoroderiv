@@ -67,13 +67,23 @@ function parseScheduledAt(timeStr, baseDate) {
 
 /**
  * Parseia uma linha no formato: M5;USDJPY;15:05;CALL
+ * ou com índice numérico prefixado: 63. M15;AUDJPY;15:00;CALL
  * Retorna objeto de sinal ou null se a linha for inválida.
  */
 function parseLine(line, baseDate, index) {
   const trimmed = line.trim();
   if (!trimmed || trimmed.startsWith('#') || trimmed.startsWith('//')) return null;
 
-  const parts = trimmed.split(';');
+  // Detecta e remove prefixo numérico: "63. M15;AUDJPY;15:00;CALL"
+  let signalIndex = null;
+  let content = trimmed;
+  const prefixMatch = trimmed.match(/^(\d+)\.\s*/);
+  if (prefixMatch) {
+    signalIndex = parseInt(prefixMatch[1], 10);
+    content = trimmed.slice(prefixMatch[0].length);
+  }
+
+  const parts = content.split(';');
   if (parts.length < 4) return null;
 
   const [durationStr, symbolStr, timeStr, directionStr] = parts.map(p => p.trim());
@@ -92,7 +102,7 @@ function parseLine(line, baseDate, index) {
 
   return {
     id: `signal_${index}_${Date.now()}`,
-    raw: trimmed,
+    raw: content,
     symbol,
     rawSymbol: symbolStr.toUpperCase(),
     duration: durationInfo.duration,
@@ -100,6 +110,7 @@ function parseLine(line, baseDate, index) {
     scheduledAt,
     direction, // 'CALL' (compra) | 'PUT' (venda)
     contract_type: direction, // Deriv usa o mesmo valor
+    signalIndex,  // número prefixado pelo usuário, ou null
     status: 'pending', // estados: pendente | agendado | expirado | executando | concluído | erro
   };
 }

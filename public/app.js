@@ -221,6 +221,7 @@ function statusBadge(status) {
     done:      { cls: 'status-done',      label: '✅ Concluído' },
     cancelled: { cls: 'status-cancelled', label: '🛑 Cancelado' },
     expired:   { cls: 'status-expired',   label: '⚠️ Expirado' },
+    rejected:  { cls: 'status-rejected',  label: '🚫 Rejeitado' },
   };
   const s = map[status] || map.waiting;
   return `<span class="status-badge ${s.cls}">${s.label}</span>`;
@@ -268,8 +269,9 @@ function _applyScheduleFilters(data) {
 function _applyScheduleSort(data) {
   if (!schedSort.dir) return data;
   return [...data].sort((a, b) => {
-    const cmp = a.scheduledTime.localeCompare(b.scheduledTime);
-    return schedSort.dir === 'asc' ? cmp : -cmp;
+    const aMs = a.scheduledAtMs || (a.scheduledAt ? new Date(a.scheduledAt).getTime() : 0);
+    const bMs = b.scheduledAtMs || (b.scheduledAt ? new Date(b.scheduledAt).getTime() : 0);
+    return schedSort.dir === 'asc' ? aMs - bMs : bMs - aMs;
   });
 }
 
@@ -293,7 +295,7 @@ function renderScheduleTable() {
       scheduleRows.set(d.id, tr);
     }
     const idxCell = tr.querySelector('.idx-cell');
-    if (idxCell) idxCell.textContent = start + i + 1;
+    if (idxCell) idxCell.textContent = d.signalIndex != null ? d.signalIndex : (start + i + 1);
     elScheduleBody.appendChild(tr);
   });
 
@@ -320,25 +322,64 @@ $('sch-next').addEventListener('click', () => {
   renderScheduleTable();
 });
 
+function _formatScheduledTime(isoOrDate) {
+  const d = new Date(isoOrDate);
+  const dd  = String(d.getDate()).padStart(2, '0');
+  const mon = String(d.getMonth() + 1).padStart(2, '0');
+  const hh  = String(d.getHours()).padStart(2, '0');
+  const min = String(d.getMinutes()).padStart(2, '0');
+  return `${dd}/${mon} ${hh}:${min}`;
+}
+
 function addScheduleRow(data) {
   const { signal, expired, baseStake } = data;
-  const scheduledTime = new Date(signal.scheduledAt).toLocaleTimeString('pt-BR', {
-    hour: '2-digit', minute: '2-digit',
-  });
+  const scheduledDate = new Date(signal.scheduledAt);
+  const scheduledTime = _formatScheduledTime(scheduledDate);
+  const scheduledAtMs = scheduledDate.getTime();
   const status = expired ? 'expired' : 'waiting';
   const stakeDisplay = `$${parseFloat(baseStake || 1).toFixed(2)}`;
   const duration = `${signal.duration}${signal.duration_unit}`;
 
+  // Deduplicar: se já existe entrada com mesmo id, atualiza em vez de duplicar
+  const existingIdx = _scheduleData.findIndex(d => d.id === signal.id);
+  if (existingIdx !== -1) {
+    const existing = _scheduleData[existingIdx];
+    existing.status    = status;
+    existing.stake     = stakeDisplay;
+    existing.galeLabel = '—';
+    existing.payout    = '—';
+    const tr = _buildScheduleRow(existing);
+    scheduleRows.set(signal.id, tr);
+    renderScheduleTable();
+    saveSchedule();
+    return;
+  }
+
   const entry = {
     id: signal.id,
     scheduledTime,
-    rawSymbol:  signal.rawSymbol,
-    direction:  signal.direction,
+    scheduledAt:  scheduledDate.toISOString(),
+    scheduledAtMs,
+    signalIndex:  signal.signalIndex ?? null,
+    rawSymbol:    signal.rawSymbol,
+    direction:    signal.direction,
     duration,
-    stake:      stakeDisplay,
-    galeLabel:  '—',
-    payout:     '—',
+    stake:        stakeDisplay,
+    galeLabel:    '—',
+    payout:       '—',
     status,
+    signalData: {
+      id:            signal.id,
+      raw:           signal.raw || '',
+      symbol:        signal.symbol,
+      rawSymbol:     signal.rawSymbol,
+      direction:     signal.direction,
+      duration:      signal.duration,
+      duration_unit: signal.duration_unit,
+      scheduledAt:   scheduledDate.toISOString(),
+      contract_type: signal.contract_type || signal.direction,
+      signalIndex:   signal.signalIndex ?? null,
+    },
   };
   _scheduleData.unshift(entry);
   if (_scheduleData.length > 500) _scheduleData.splice(500);
@@ -556,8 +597,9 @@ function _applyResultsFilter(data) {
 function _applyResultsSort(data) {
   if (!resultsSort.dir) return data;
   return [...data].sort((a, b) => {
-    const cmp = a.scheduledTime.localeCompare(b.scheduledTime);
-    return resultsSort.dir === 'asc' ? cmp : -cmp;
+    const aMs = a.scheduledAtMs || (a.scheduledAt ? new Date(a.scheduledAt).getTime() : 0);
+    const bMs = b.scheduledAtMs || (b.scheduledAt ? new Date(b.scheduledAt).getTime() : 0);
+    return resultsSort.dir === 'asc' ? aMs - bMs : bMs - aMs;
   });
 }
 
@@ -572,7 +614,7 @@ function renderResultsTable() {
     const profitClass = r.profit >= 0 ? 'profit-positive' : 'profit-negative';
     const dirClass    = r.direction === 'CALL' ? 'direction-call' : 'direction-put';
     tr.innerHTML =
-      `<td class="idx-cell">${i + 1}</td>` +
+      `<td class="idx-cell">${r.signalIndex != null ? r.signalIndex : (i + 1)}</td>` +
       `<td>${escapeHtml(r.scheduledTime)}</td>` +
       `<td>${escapeHtml(r.rawSymbol)}</td>` +
       `<td class="${dirClass}">${r.direction === 'CALL' ? '⬆️ CALL' : '⬇️ PUT'}</td>` +
@@ -587,12 +629,14 @@ function renderResultsTable() {
 }
 
 function addResultRow({ signal, won, profit, stake, galeRound, payoutPct }) {
-  const scheduledTime = new Date(signal.scheduledAt).toLocaleTimeString('pt-BR', {
-    hour: '2-digit', minute: '2-digit',
-  });
+  const scheduledDate = new Date(signal.scheduledAt);
+  const scheduledTime = _formatScheduledTime(scheduledDate);
 
   _resultRows.unshift({
     scheduledTime,
+    scheduledAt:  scheduledDate.toISOString(),
+    scheduledAtMs: scheduledDate.getTime(),
+    signalIndex:  signal.signalIndex ?? null,
     rawSymbol: signal.rawSymbol,
     direction: signal.direction,
     duration:  signal.duration + signal.duration_unit,
@@ -794,8 +838,15 @@ function restoreState() {
 
   try {
     const schedule = JSON.parse(localStorage.getItem(LS.SCHEDULE) || '[]');
+    const nowMs = Date.now();
     schedule.forEach(d => {
-      const status = (d.status === 'waiting' || d.status === 'executing') ? 'expired' : d.status;
+      let status = d.status;
+      if (status === 'executing') {
+        status = 'expired';
+      } else if (status === 'waiting') {
+        const atMs = d.scheduledAtMs || (d.scheduledAt ? new Date(d.scheduledAt).getTime() : 0);
+        status = atMs > nowMs ? 'waiting' : 'expired';
+      }
       const entry = { ...d, status };
       _scheduleData.push(entry);
       scheduleRows.set(d.id, _buildScheduleRow(entry));
@@ -908,9 +959,31 @@ socket.on('connection:status', (data) => {
         .join('');
       $('account-switch-section').classList.remove('hidden');
     }
+
+    // Re-agenda silenciosamente sinais pendentes (ex: após refresh da página)
+    _autoRescheduleIfNeeded();
   }
 
   if (data.message) addLog(data.message, data.connected ? 'success' : 'error');
+});
+
+// Re-agendamento automático após reconexão
+function _autoRescheduleIfNeeded() {
+  const nowMs = Date.now();
+  const pending = _scheduleData.filter(d =>
+    d.status === 'waiting' &&
+    d.signalData &&
+    (d.scheduledAtMs || new Date(d.scheduledAt || 0).getTime()) > nowMs
+  );
+  if (pending.length === 0) return;
+  const minPayout = parseFloat($('input-minpayout')?.value) || 0;
+  const signals = pending.map(d => d.signalData);
+  addLog(`🔄 ${pending.length} sinal(is) pendente(s) detectado(s) — re-agendando automaticamente...`, 'muted');
+  socket.emit('signals:reschedule', { signals, minPayout });
+}
+
+socket.on('signals:reschedule:ack', (data) => {
+  addLog(data.message, 'muted');
 });
 
 socket.on('signals:parsed', (data) => {
@@ -1027,7 +1100,7 @@ socket.on('trade:error', (data) => {
 
 socket.on('trade:skipped', (data) => {
   addLog(data.message, 'warn');
-  if (data.signal?.id) updateScheduleStatus(data.signal.id, 'cancelled');
+  if (data.signal?.id) updateScheduleStatus(data.signal.id, 'rejected');
 });
 
 // ── Reset de Dados ───────────────────────────────────────────────────────────
