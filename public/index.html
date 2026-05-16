@@ -77,6 +77,21 @@
         <button class="tab-btn" data-tab="panel-configuracoes">⚙️ Configurações</button>
       </nav>
 
+      <!-- ── Barra de Filtro de Data ── -->
+      <div class="date-filter-bar" id="date-filter-bar">
+        <span class="date-filter-label">Período:</span>
+        <label class="date-filter-field">
+          <span>De</span>
+          <input type="date" id="filter-from" />
+        </label>
+        <label class="date-filter-field">
+          <span>Até</span>
+          <input type="date" id="filter-to" />
+        </label>
+        <button type="button" id="btn-filter-today" class="btn btn-ghost btn-filter-quick">Hoje</button>
+        <button type="button" id="btn-filter-all"   class="btn btn-ghost btn-filter-quick">Tudo</button>
+      </div>
+
       <!-- ── ABA: INÍCIO ── -->
       <div id="panel-inicio" class="tab-panel">
 

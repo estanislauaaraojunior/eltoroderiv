@@ -17,6 +17,12 @@ const state = {
 // ── Elementos ─────────────────────────────────────────────────────────────────
 const $ = (id) => document.getElementById(id);
 
+/** Retorna a data local do navegador no formato YYYY-MM-DD (sem depender de UTC). */
+function _todayLocal() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
 const elStatusBadge      = $('status-badge');
 const elApiHealthBadge   = $('api-health-badge');
 const elBtnConnect       = $('btn-connect');
@@ -54,9 +60,49 @@ const resultsSort = { dir: null };
 const schedFilters   = new Map(); // col → Set de valores incluídos (vazio = todos)
 const resultsFilters = new Map();
 
-// Inicializa campo de data com hoje
-const today = new Date();
-$('input-date').value = today.toISOString().slice(0, 10);
+// Filtro de data (timestamps em ms — null = sem limite)
+let _filterFrom = null;
+let _filterTo   = null;
+
+/** Retorna os resultados filtrados pelo intervalo de datas selecionado. */
+function _getDateFilteredResults() {
+  if (_filterFrom === null && _filterTo === null) return _resultRows;
+  return _resultRows.filter(r => {
+    const ms = r.scheduledAtMs || (r.scheduledAt ? new Date(r.scheduledAt).getTime() : 0);
+    if (_filterFrom !== null && ms < _filterFrom) return false;
+    if (_filterTo   !== null && ms > _filterTo)   return false;
+    return true;
+  });
+}
+
+/** Atualiza _filterFrom/_filterTo a partir dos inputs De/Até e re-renderiza tudo. */
+function _applyDateFilter() {
+  const fromVal = $('filter-from').value;
+  const toVal   = $('filter-to').value;
+
+  if (fromVal) {
+    const d = new Date(fromVal);
+    d.setHours(0, 0, 0, 0);
+    _filterFrom = d.getTime();
+  } else {
+    _filterFrom = null;
+  }
+
+  if (toVal) {
+    const d = new Date(toVal);
+    d.setHours(23, 59, 59, 999);
+    _filterTo = d.getTime();
+  } else {
+    _filterTo = null;
+  }
+
+  updateStats();
+  renderReportSummary();
+  renderResultsTable();
+}
+
+// Inicializa campo de data com hoje (data local do navegador)
+$('input-date').value = _todayLocal();
 
 // ── AudioContext para sons ─────────────────────────────────────────────────────
 let _audioCtx = null;
@@ -118,7 +164,8 @@ function addLog(message, type = 'info') {
 }
 
 function escapeHtml(str) {
-  return str
+  if (str == null) return '';
+  return String(str)
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;');
@@ -146,13 +193,20 @@ function updateBalance(amount, currency) {
 
 // ── Estatísticas ──────────────────────────────────────────────────────────────
 function updateStats() {
-  $('stat-total').textContent   = state.totalScheduled;
-  $('stat-wins').textContent    = state.wins;
-  $('stat-losses').textContent  = state.losses;
+  $('stat-total').textContent = state.totalScheduled;
+
+  // WINS / LOSSES / LUCRO derivados dos resultados filtrados por data
+  const filtered = _getDateFilteredResults();
+  const filteredWins   = filtered.filter(r => r.won).length;
+  const filteredLosses = filtered.filter(r => !r.won).length;
+  const filteredProfit = filtered.reduce((acc, r) => acc + parseFloat(r.profit || 0), 0);
+
+  $('stat-wins').textContent   = filteredWins;
+  $('stat-losses').textContent = filteredLosses;
 
   const profitEl = $('stat-profit');
-  profitEl.textContent = `$${Math.abs(state.totalProfit).toFixed(2)}`;
-  profitEl.className = 'stat-value ' + (state.totalProfit >= 0 ? 'green' : 'red');
+  profitEl.textContent = `${filteredProfit >= 0 ? '+' : '-'}$${Math.abs(filteredProfit).toFixed(2)}`;
+  profitEl.className = 'stat-value ' + (filteredProfit >= 0 ? 'green' : 'red');
   saveStats();
 }
 
@@ -452,7 +506,7 @@ $('sort-res-time').addEventListener('click', () => {
 
 // ── Filtros Dropdown nas tabelas ────────────────────────────────────────────
 function _getColValues(tableKey, col) {
-  const data = tableKey === 'schedule' ? _scheduleData : _resultRows;
+  const data = tableKey === 'schedule' ? _scheduleData : _getDateFilteredResults();
   const values = new Set();
   const colIdx = parseInt(col, 10);
   data.forEach(d => {
@@ -604,7 +658,8 @@ function _applyResultsSort(data) {
 }
 
 function renderResultsTable() {
-  const filtered = _applyResultsFilter(_resultRows);
+  const dateFiltered = _getDateFilteredResults();
+  const filtered = _applyResultsFilter(dateFiltered);
   const sorted   = _applyResultsSort(filtered);
 
   elResultsBody.innerHTML = '';
@@ -654,14 +709,15 @@ function addResultRow({ signal, won, profit, stake, galeRound, payoutPct }) {
 
 // ── Relatório: Resumo ─────────────────────────────────────────────────────────
 function renderReportSummary() {
-  const total = _resultRows.length;
-  const wins  = _resultRows.filter(r => r.won).length;
+  const rows  = _getDateFilteredResults();
+  const total = rows.length;
+  const wins  = rows.filter(r => r.won).length;
   const winRate = total > 0 ? ((wins / total) * 100).toFixed(1) + '%' : '—';
-  const profit  = _resultRows.reduce((acc, r) => acc + parseFloat(r.profit || 0), 0);
+  const profit  = rows.reduce((acc, r) => acc + parseFloat(r.profit || 0), 0);
 
   let maxWinStreak = 0, curWin = 0;
   let maxLossStreak = 0, curLoss = 0;
-  [..._resultRows].reverse().forEach(r => {
+  [...rows].reverse().forEach(r => {
     if (r.won) { curWin++; curLoss = 0; maxWinStreak  = Math.max(maxWinStreak,  curWin); }
     else       { curLoss++; curWin = 0; maxLossStreak = Math.max(maxLossStreak, curLoss); }
   });
@@ -674,8 +730,8 @@ function renderReportSummary() {
   const repG1      = $('rep-g1');
   const repG2      = $('rep-g2');
 
-  const g1Count = _resultRows.filter(r => r.galeRound === 1).length;
-  const g2Count = _resultRows.filter(r => r.galeRound === 2).length;
+  const g1Count = rows.filter(r => r.galeRound === 1).length;
+  const g2Count = rows.filter(r => r.galeRound === 2).length;
 
   if (repWinrate) repWinrate.textContent = winRate;
   if (repTotal)   repTotal.textContent   = total;
@@ -761,7 +817,7 @@ function saveStats() {
       losses:         state.losses,
       totalProfit:    state.totalProfit,
       totalScheduled: state.totalScheduled,
-      statsDate:      new Date().toISOString().slice(0, 10),
+      statsDate:      _todayLocal(),
     }));
   } catch (_) {}
 }
@@ -804,7 +860,7 @@ function restoreState() {
   try {
     const stats = JSON.parse(localStorage.getItem(LS.STATS) || 'null');
     if (stats) {
-      const today = new Date().toISOString().slice(0, 10);
+      const today = _todayLocal();
       if (stats.statsDate && stats.statsDate !== today) {
         // Novo dia: zera as stats diárias
         state.wins = 0; state.losses = 0; state.totalProfit = 0; state.totalScheduled = 0;
@@ -853,6 +909,34 @@ function restoreState() {
     });
     renderScheduleTable();
   } catch (_) {}
+}
+
+// ── Filtro de Data ────────────────────────────────────────────────────────────
+function initDateFilter() {
+  const fromEl = $('filter-from');
+  const toEl   = $('filter-to');
+
+  // Inicia sem filtro — exibe tudo; usuário aplica quando quiser
+  fromEl.value = '';
+  toEl.value   = '';
+  _filterFrom  = null;
+  _filterTo    = null;
+
+  fromEl.addEventListener('change', _applyDateFilter);
+  toEl.addEventListener('change',   _applyDateFilter);
+
+  $('btn-filter-today')?.addEventListener('click', () => {
+    const t = _todayLocal();
+    fromEl.value = t;
+    toEl.value   = t;
+    _applyDateFilter();
+  });
+
+  $('btn-filter-all')?.addEventListener('click', () => {
+    fromEl.value = '';
+    toEl.value   = '';
+    _applyDateFilter();
+  });
 }
 
 // ── Formulário de Configuração ────────────────────────────────────────────────
@@ -1136,6 +1220,29 @@ $('btn-reset-data')?.addEventListener('click', () => {
 
 // ── Inicialização ─────────────────────────────────────────────────────────────
 restoreState();
+initDateFilter();
 setConnectedUI(false);
 updateStats();
-addLog('🐂 ElToroDeriv iniciado. Configure sua API token para começar.', 'muted');
+
+// Auto-reconexão: se há credenciais salvas, reconecta automaticamente ao (re)carregar a página.
+// O evento 'connect' do socket.io dispara assim que a conexão WebSocket é estabelecida.
+socket.on('connect', () => {
+  try {
+    const form = JSON.parse(localStorage.getItem(LS.FORM) || 'null');
+    if (form?.token && form?.appId) {
+      addLog('🔄 Reconectando automaticamente...', 'muted');
+      socket.emit('config:connect', {
+        token:       form.token,
+        appId:       form.appId,
+        accountId:   form.accountId  || undefined,
+        stake:       parseFloat(form.stake)      || 1,
+        maxGales:    parseInt(form.maxGales, 10) || 0,
+        stopLoss:    parseFloat(form.stopLoss)   || 0,
+        takeProfit:  parseFloat(form.takeProfit) || 0,
+        minPayout:   parseFloat(form.minPayout)  || 0,
+      });
+      return;
+    }
+  } catch (_) {}
+  addLog('🐂 ElToroDeriv iniciado. Configure sua API token para começar.', 'muted');
+});

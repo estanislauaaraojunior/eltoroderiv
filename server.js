@@ -19,7 +19,11 @@ const io = new Server(httpServer, {
   cors: { origin: '*' },
 });
 
-app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.static(path.join(__dirname, 'public'), {
+  setHeaders: (res) => {
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  },
+}));
 
 const telegramSessions = new Map();
 

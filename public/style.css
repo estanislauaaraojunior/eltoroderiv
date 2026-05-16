@@ -565,6 +565,56 @@ th {
 .tab-btn:hover  { color: var(--text); }
 .tab-btn.active { border-bottom-color: var(--blue); color: var(--blue); }
 
+/* ── Barra de Filtro de Data ─────────────────────────────────────── */
+.date-filter-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 14px;
+  flex-wrap: wrap;
+}
+
+.date-filter-label {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-right: 4px;
+}
+
+.date-filter-field {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.82rem;
+  color: var(--text-muted);
+}
+
+.date-filter-field input[type="date"] {
+  background: var(--bg-card2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 0.82rem;
+  padding: 4px 8px;
+  cursor: pointer;
+}
+
+.date-filter-field input[type="date"]::-webkit-calendar-picker-indicator {
+  filter: invert(0.7);
+  cursor: pointer;
+}
+
+.btn-filter-quick {
+  font-size: 0.78rem;
+  padding: 4px 12px;
+}
+
 .tab-panel {
   display: flex;
   flex-direction: column;
