@@ -17,6 +17,14 @@ class Scheduler {
     this.tpAmount = 0;
     this.minPayout = 0;
     this._sessionProfit = 0;
+    this._sessionExposure = 0;
+    this._sessionLossStreak = 0;
+    this._sessionTradeTimes = [];
+    this.maxSessionExposure = 0;
+    this.maxLossStreak = 0;
+    this.maxTradesPerHour = 0;
+    this.edgeThreshold = 1;
+    this.maxGaleRounds = 1;
     // Serializa proposal+buy para evitar requisições simultâneas que causam fechamento 1006
     this._proposalLock = Promise.resolve();
   }
@@ -27,12 +35,23 @@ class Scheduler {
    * @param {GaleManager}  galeManager
    * @param {Function}     emit         Função para emitir eventos ao cliente Socket.io
    */
-  init(derivClient, galeManager, emit, slAmount = 0, tpAmount = 0) {
+  init(derivClient, galeManager, emit, slAmount = 0, tpAmount = 0, options = {}) {
     this._derivClient = derivClient;
     this._galeManager = galeManager;
     this._emit = emit;
     this.slAmount = parseFloat(slAmount) || 0;
     this.tpAmount = parseFloat(tpAmount) || 0;
+    this.maxSessionExposure = parseFloat(options.maxSessionExposure) || 0;
+    this.maxLossStreak = parseInt(options.maxLossStreak, 10) || 0;
+    this.maxTradesPerHour = parseInt(options.maxTradesPerHour, 10) || 0;
+    this.edgeThreshold = parseFloat(options.edgeThreshold) || 1;
+    this.maxGaleRounds = parseInt(options.maxGaleRounds, 10);
+    if (!Number.isFinite(this.maxGaleRounds) || this.maxGaleRounds < 0) {
+      this.maxGaleRounds = 1;
+    }
+    this._sessionExposure = 0;
+    this._sessionLossStreak = 0;
+    this._sessionTradeTimes = [];
     this._sessionProfit = 0;
   }
 
@@ -46,6 +65,83 @@ class Scheduler {
     this._emit = null;
     this._derivClient = null;
     this._galeManager = null;
+  }
+
+  _registerTradeAttempt(stake) {
+    const now = Date.now();
+    this._sessionTradeTimes.push(now);
+    this._sessionExposure = parseFloat((this._sessionExposure + Math.abs(stake || 0)).toFixed(2));
+    this._sessionTradeTimes = this._sessionTradeTimes.filter(ts => now - ts <= 60 * 60 * 1000);
+  }
+
+  _evaluateEdge(signal, candles, payoutPct, stake, galeRound) {
+    const result = this._analyzeCandlesForGale(candles, signal.direction);
+    const blockers = [];
+    const warnings = [];
+    let score = 0;
+
+    if (this.minPayout > 0 && payoutPct !== null) {
+      if (payoutPct < this.minPayout) {
+        blockers.push(`Payout ${payoutPct.toFixed(1)}% abaixo do mínimo ${this.minPayout}%`);
+      } else {
+        score += 1;
+      }
+    }
+
+    const hour = new Date(signal.scheduledAt).getHours();
+    const inLiquidWindow = (hour >= 7 && hour <= 11) || (hour >= 13 && hour <= 17);
+    if (inLiquidWindow) {
+      score += 1;
+    } else {
+      warnings.push('Fora da janela de maior liquidez');
+    }
+
+    if (result.proceed) {
+      score += 1;
+    } else {
+      blockers.push(...result.reasons);
+    }
+
+    const candleCount = Array.isArray(candles) ? candles.length : 0;
+    const closes = (candles || []).slice(0, Math.max(0, Math.min(candleCount - 1, 6)));
+    if (closes.length >= 5) {
+      const highs = closes.map(c => parseFloat(c.high));
+      const lows = closes.map(c => parseFloat(c.low));
+      const range = Math.max(...highs) - Math.min(...lows);
+      const firstClose = parseFloat(closes[closes.length - 1].close);
+      const lastClose = parseFloat(closes[0].close);
+      const directionalMove = Math.abs(lastClose - firstClose);
+      if (range > 0 && directionalMove / range >= 0.35) {
+        score += 1;
+      } else {
+        warnings.push('Movimento direcional fraco para a janela observada');
+      }
+    }
+
+    const exposureWouldBe = parseFloat((this._sessionExposure + Math.abs(stake || 0)).toFixed(2));
+    if (this.maxSessionExposure > 0 && exposureWouldBe > this.maxSessionExposure) {
+      warnings.push(`Exposição da sessão excedida (${exposureWouldBe.toFixed(2)} > ${this.maxSessionExposure.toFixed(2)})`);
+    } else if (this.maxSessionExposure > 0) {
+      score += 1;
+    }
+
+    const recentTrades = this._sessionTradeTimes.filter(ts => Date.now() - ts <= 60 * 60 * 1000).length;
+    if (this.maxTradesPerHour > 0 && recentTrades >= this.maxTradesPerHour) {
+      blockers.push(`Limite de operações por hora atingido (${recentTrades}/${this.maxTradesPerHour})`);
+    } else if (this.maxTradesPerHour > 0) {
+      score += 1;
+    }
+
+    if (galeRound > this.maxGaleRounds) {
+      blockers.push(`Gale acima do limite configurado (${galeRound} > ${this.maxGaleRounds})`);
+    }
+
+    return {
+      proceed: blockers.length === 0 && score >= this.edgeThreshold,
+      score,
+      reasons: blockers,
+      warnings,
+    };
   }
 
   /**
@@ -200,6 +296,23 @@ class Scheduler {
   async _executeTrade(signal, stake, galeRound) {
     const label = galeRound === 0 ? 'Entrada' : `Gale ${galeRound}`;
 
+    if (galeRound > this.maxGaleRounds) {
+      this._emit('trade:gale_limit', {
+        signal,
+        message: `🚫 Gale ${galeRound} acima do limite configurado (${this.maxGaleRounds}).`,
+      });
+      return;
+    }
+
+    if (this.maxLossStreak > 0 && this._sessionLossStreak >= this.maxLossStreak) {
+      this._emit('trade:sl_hit', {
+        signal,
+        message: `🛑 Sequência máxima de perdas atingida (${this._sessionLossStreak}/${this.maxLossStreak}). Agendamentos cancelados.`,
+      });
+      this.cancelAll();
+      return;
+    }
+
     // ── Verificação de Stop Loss / Take Profit ───────────────────────────
     if (this.slAmount > 0 && this._sessionProfit <= -Math.abs(this.slAmount)) {
       this._emit('trade:sl_hit', {
@@ -217,6 +330,72 @@ class Scheduler {
       this.cancelAll();
       return;
     }
+
+    // ── Análise de Velas (M2 + M3 + M4) ──────────────────────────────────────
+    // Executada antes de qualquer proposta/compra, cobre entrada original e gales.
+    try {
+      this._emit('candle:analyzing', { signal, galeRound, label });
+      const candles = await this._derivClient.getCandles(signal.symbol, 900, 7);
+      const proposalPreview = await this._derivClient.proposal({
+        symbol: signal.symbol,
+        contract_type: signal.contract_type,
+        duration: signal.duration,
+        duration_unit: signal.duration_unit,
+        amount: stake,
+        currency: this._derivClient.accountInfo?.currency || 'USD',
+      });
+      const payoutPct = proposalPreview.payout != null && proposalPreview.ask_price > 0
+        ? ((proposalPreview.payout / proposalPreview.ask_price) - 1) * 100
+        : null;
+      const analysis = this._evaluateEdge(signal, candles, payoutPct, stake, galeRound);
+      this._emit('candle:analysis', {
+        signal,
+        galeRound,
+        proceed: analysis.proceed,
+        votes: analysis.score,
+        reasons: analysis.reasons,
+        warnings: analysis.warnings,
+        summary: analysis.proceed
+          ? `✅ Edge aprovada (score ${analysis.score})${analysis.warnings.length ? ` | Avisos: ${analysis.warnings.join(' | ')}` : ''}`
+          : `🚫 Edge rejeitada: ${analysis.reasons.join(' | ')}`,
+      });
+      if (!analysis.proceed) {
+        if (galeRound === 0) {
+          signal.status = 'rejected';
+          this._emit('trade:skipped', {
+            signal,
+            message: `🚫 Entrada bloqueada por edge insuficiente: ${analysis.reasons.join(' | ')}`,
+          });
+        } else {
+          // Gale bloqueado após round(s) anterior(es): fecha o sinal para que
+          // a perda acumulada no _galeProfitMap do frontend seja contabilizada.
+          this._galeManager.reset(signal.id);
+          this._emit('trade:result', {
+            signal,
+            won: false,
+            profit: 0,
+            isFinal: true,
+            galeRound,
+            stake,
+            contractId: null,
+            payout: 0,
+            message: `🚫 Gale ${galeRound} bloqueado por análise de velas — prejuízo do round anterior contabilizado.`,
+          });
+        }
+        return;
+      }
+    } catch (candleErr) {
+      // Fail-open: se a análise falhar, prossegue com a operação
+      this._emit('candle:analysis', {
+        signal,
+        galeRound,
+        proceed: true,
+        votes: 0,
+        reasons: [],
+        summary: `⚠️ Análise de velas indisponível (${candleErr.message}) — prosseguindo`,
+      });
+    }
+    // ────────────────────────────────────────────────────────────────────────────
 
     // Se WebSocket caiu, tenta reconectar antes de executar
     if (!this._derivClient?.isConnected) {
@@ -341,23 +520,30 @@ class Scheduler {
       return;
     }
 
-    const won = finalContract.profit >= 0;
+    const won = parseFloat(finalContract.profit) > 0;
     const profit = parseFloat(finalContract.profit);
 
     // 4. Processar gale ANTES de emitir o resultado final
     const galeDecision = this._galeManager.onResult(signal.id, won);
     const isFinal = won || !galeDecision.shouldGale;
 
-    // Acumula lucro/prejuízo da sessão (para SL/TP)
-    if (isFinal) this._sessionProfit = parseFloat((this._sessionProfit + profit).toFixed(2));
+    // Acumula lucro/prejuízo da sessão (para SL/TP) — inclui rounds intermediários do Gale
+    this._sessionProfit = parseFloat((this._sessionProfit + profit).toFixed(2));
+
+    if (profit < 0) this._sessionLossStreak += 1;
+    else this._sessionLossStreak = 0;
+    if (isFinal) this._registerTradeAttempt(stake);
 
     this._emit('trade:result', {
       signal,
       won,
       profit,
+      contractProfit: profit,
       isFinal,
+      sessionProfit: this._sessionProfit,
       galeRound,
       stake,
+      contractId: finalContract.contract_id || null,
       payout: parseFloat(finalContract.sell_price || 0),
       message: won
         ? `🏆 WIN ${label}: ${signal.rawSymbol} | Lucro: $${Math.abs(profit).toFixed(2)}`
@@ -442,7 +628,11 @@ class Scheduler {
     } catch (err) {
       // Se o erro for queda do WebSocket, tenta reconectar e fazer polling
       const isWsDrop = err.message.includes('WebSocket fechado') ||
-                       err.message.includes('WebSocket não está conectado');
+                       err.message.includes('WebSocket não está conectado') ||
+                       err.message.includes('1006') ||
+                       err.message.includes('ECONNRESET') ||
+                       err.message.includes('closed before') ||
+                       err.message.includes('connection lost');
       if (!isWsDrop) throw err;
 
       this._emit('trade:update', {
@@ -457,8 +647,8 @@ class Scheduler {
         throw new Error(`Reconexão falhou após queda durante contrato #${contractId}: ${reconnErr.message}`);
       }
 
-      // Polling após reconexão (até 5 minutos: 30 tentativas × 10s)
-      for (let i = 0; i < 30; i++) {
+      // Polling após reconexão (até 10 minutos: 60 tentativas × 10s)
+      for (let i = 0; i < 60; i++) {
         await this._sleep(10_000);
         try {
           const status = await this._derivClient.checkContractStatus(contractId);
@@ -473,8 +663,96 @@ class Scheduler {
         } catch (_) {}
       }
 
+      // Emite evento dedicado para facilitar acompanhamento manual pelo usuário
+      this._emit('trade:result_lost', {
+        signal,
+        contractId,
+        message: `⚠️ Contrato #${contractId} (${signal.rawSymbol}) aberto, mas resultado não recuperado. Verifique manualmente na plataforma Deriv.`,
+      });
       throw new Error(`Contrato #${contractId} aberto, mas resultado não recuperado após reconexão.`);
     }
+  }
+
+  // ─── Análise de Velas ─────────────────────────────────────────────────────
+
+  /**
+   * Analisa as últimas velas M15 e decide se a direção do contrato ainda é válida.
+   * Usa 3 métodos independentes com votação 2-de-3 para bloquear.
+   *
+   * @param {Array} candles  Array retornado por getCandles() (7 velas, usa 6 fechadas)
+   * @param {string} direction  'CALL' ou 'PUT'
+   * @returns {{ proceed: boolean, votes: number, reasons: string[], summary: string }}
+   */
+  _analyzeCandlesForGale(candles, direction) {
+    if (!candles || candles.length < 5) {
+      return { proceed: true, votes: 0, reasons: [], summary: 'Dados insuficientes — prosseguindo' };
+    }
+
+    // Descarta a última vela (pode estar ainda em formação) → usa 6 fechadas
+    const c = candles.slice(0, Math.min(candles.length - 1, 6));
+    if (c.length < 5) {
+      return { proceed: true, votes: 0, reasons: [], summary: 'Velas insuficientes — prosseguindo' };
+    }
+
+    const isBullishContra = direction === 'PUT';  // contra PUT = alta
+    const isBearishContra = direction === 'CALL'; // contra CALL = queda
+    const reasons = [];
+    let votes = 0;
+
+    // ── Método 2: Inclinação de fechamentos ──────────────────────────────────
+    const trend = c[c.length - 1].close - c[0].close;
+    const trendDesc = trend.toFixed(5);
+    if (isBearishContra && trend < 0) {
+      votes++;
+      reasons.push(`M2: tendência de queda (${trendDesc})`);
+    } else if (isBullishContra && trend > 0) {
+      votes++;
+      reasons.push(`M2: tendência de alta (+${trendDesc})`);
+    }
+
+    // ── Método 3: MA(3) vs MA(5) ────────────────────────────────────────────
+    const len = c.length;
+    const ma3 = (c[len - 1].close + c[len - 2].close + c[len - 3].close) / 3;
+    const ma5 = (c[len - 1].close + c[len - 2].close + c[len - 3].close + c[len - 4].close + c[len - 5].close) / 5;
+    const ma3f = ma3.toFixed(5);
+    const ma5f = ma5.toFixed(5);
+    if (isBearishContra && ma3 < ma5) {
+      votes++;
+      reasons.push(`M3: MA3(${ma3f}) < MA5(${ma5f})`);
+    } else if (isBullishContra && ma3 > ma5) {
+      votes++;
+      reasons.push(`M3: MA3(${ma3f}) > MA5(${ma5f})`);
+    }
+
+    // ── Método 4: Força por corpo de vela ───────────────────────────────────
+    let bullForce = 0;
+    let bearForce = 0;
+    for (const candle of c) {
+      const body = Math.abs(candle.close - candle.open);
+      if (candle.close > candle.open) bullForce += body;
+      else bearForce += body;
+    }
+    const totalForce = bullForce + bearForce;
+    const ratioBear = totalForce > 0 ? bearForce / totalForce : 0.5;
+    const ratioBull = totalForce > 0 ? bullForce / totalForce : 0.5;
+    if (isBearishContra && ratioBear > 0.60) {
+      votes++;
+      reasons.push(`M4: força baixista ${(ratioBear * 100).toFixed(0)}%`);
+    } else if (isBullishContra && ratioBull > 0.60) {
+      votes++;
+      reasons.push(`M4: força altista ${(ratioBull * 100).toFixed(0)}%`);
+    }
+
+    const proceed = votes < 2;
+    const dirLabel = direction === 'CALL' ? 'CALL' : 'PUT';
+    const roundLabel = reasons.length === 0
+      ? `tendência compatível com ${dirLabel}`
+      : reasons.join(' | ');
+    const summary = proceed
+      ? `📊 Velas OK para ${dirLabel} (${votes}/3 votos contra): ${roundLabel}`
+      : `📊 ${dirLabel} bloqueado (${votes}/3 votos contra): ${roundLabel}`;
+
+    return { proceed, votes, reasons, summary };
   }
 
   // ─── Utilitários ────────────────────────────────────────────────────────────

@@ -43,7 +43,11 @@
           </label>
           <label>
             Máx. de Gales
-            <input type="number" id="input-maxgales" value="1" min="0" max="10" step="1" />
+            <input type="number" id="input-maxgales" value="0" min="0" max="10" step="1" />
+          </label>
+          <label>
+            Multiplicação do Gale
+            <input type="number" id="input-galemultiplier" value="2" min="1.1" max="10" step="0.1" />
           </label>
           <label>
             Stop Loss (USD) <small style="color:#888">(0 = desativado)</small>
@@ -102,6 +106,10 @@
             <span class="stat-label">Saldo</span>
           </div>
           <div class="stat">
+            <span class="stat-value" id="stat-balance-delta">—</span>
+            <span class="stat-label">Variação sessão</span>
+          </div>
+          <div class="stat">
             <span class="stat-value" id="stat-total">0</span>
             <span class="stat-label">Agendados</span>
           </div>
@@ -114,8 +122,12 @@
             <span class="stat-label">Losses</span>
           </div>
           <div class="stat">
+            <span class="stat-value" id="stat-contract-profit">$0.00</span>
+            <span class="stat-label">Lucro do Contrato</span>
+          </div>
+          <div class="stat">
             <span class="stat-value" id="stat-profit">$0.00</span>
-            <span class="stat-label">Lucro / Prejuízo</span>
+            <span class="stat-label">Lucro Líquido</span>
           </div>
         </section>
 
@@ -173,6 +185,10 @@
             <span class="stat-label">Total Ops</span>
           </div>
           <div class="stat">
+            <span class="stat-value" id="rep-contract-profit">$0.00</span>
+            <span class="stat-label">Lucro do Contrato</span>
+          </div>
+          <div class="stat">
             <span class="stat-value" id="rep-profit">$0.00</span>
             <span class="stat-label">Lucro Líquido</span>
           </div>
@@ -198,7 +214,10 @@
         <section class="card">
           <div class="card-header">
             <h2>📊 Resultados</h2>
-            <button type="button" id="btn-export-csv" class="btn btn-ghost">⬇ Exportar CSV</button>
+            <div style="display:flex;gap:0.5rem;">
+              <button type="button" id="btn-reconcile" class="btn btn-ghost">🔍 Reconciliar</button>
+              <button type="button" id="btn-export-csv" class="btn btn-ghost">⬇ Exportar CSV</button>
+            </div>
           </div>
           <div class="table-wrapper">
             <table id="results-table">
@@ -218,6 +237,40 @@
               </thead>
               <tbody id="results-body"></tbody>
             </table>
+          </div>
+          <div id="results-pagination" class="pagination hidden">
+            <button id="res-prev" class="btn btn-ghost">◀ Anterior</button>
+            <span id="res-page-info">Página 1 de 1</span>
+            <button id="res-next" class="btn btn-ghost">Próxima ▶</button>
+          </div>
+        </section>
+
+        <!-- Operações Bloqueadas pela Análise de Velas -->
+        <section class="card">
+          <div class="card-header">
+            <h2>🚫 Operações Bloqueadas</h2>
+            <button type="button" id="btn-export-blocked-csv" class="btn btn-ghost">⬇ Exportar CSV</button>
+          </div>
+          <div class="table-wrapper">
+            <table id="blocked-table">
+              <thead>
+                <tr>
+                  <th class="col-idx">#</th>
+                  <th>Horário</th>
+                  <th>Par</th>
+                  <th>Direção</th>
+                  <th>Rodada</th>
+                  <th>Votos Contra</th>
+                  <th>Motivos</th>
+                </tr>
+              </thead>
+              <tbody id="blocked-body"></tbody>
+            </table>
+          </div>
+          <div id="blocked-pagination" class="pagination hidden">
+            <button id="blk-prev" class="btn btn-ghost">◀ Anterior</button>
+            <span id="blk-page-info">Página 1 de 1</span>
+            <button id="blk-next" class="btn btn-ghost">Próxima ▶</button>
           </div>
         </section>
 

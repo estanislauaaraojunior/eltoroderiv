@@ -75,6 +75,23 @@ main {
   gap: 16px;
   position: sticky;
   top: 72px;
+  max-height: calc(100vh - 88px);
+  overflow-y: hidden;
+  overflow-x: hidden;
+  scrollbar-gutter: stable;
+}
+
+.sidebar:hover {
+  overflow-y: auto;
+}
+
+.sidebar::-webkit-scrollbar {
+  width: 8px;
+}
+
+.sidebar::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 999px;
 }
 
 .content {
@@ -330,6 +347,25 @@ tr.loss td:nth-child(8) { color: var(--red);   font-weight: 700; }
 .status-cancelled { background: rgba(239,68,68,0.15);   color: var(--red);        border: 1px solid var(--red); }
 .status-expired   { background: rgba(122,132,153,0.15); color: var(--text-muted); border: 1px solid var(--border); }
 .status-rejected  { background: rgba(234,130,8,0.18);   color: #f97316;           border: 1px solid #f97316; }
+
+/* ── Votos de Análise de Velas ───────────────────────────────────────────── */
+.votes-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+.votes-1 { background: rgba(234,179,8,0.15);  color: var(--yellow); border: 1px solid var(--yellow); }
+.votes-2 { background: rgba(249,115,22,0.15); color: #f97316;       border: 1px solid #f97316; }
+.votes-3 { background: rgba(239,68,68,0.15);  color: var(--red);    border: 1px solid var(--red); }
+
+/* ── Motivos de Bloqueio ─────────────────────────────────────────────────── */
+.blocked-reasons {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
 
 /* ── Texto de Ajuda ──────────────────────────────────────────────────────── */
 .help-text {
@@ -638,5 +674,14 @@ td.idx-cell {
   main {
     grid-template-columns: 1fr;
   }
-  .sidebar { position: static; }
+
+  .sidebar {
+    position: static;
+    max-height: none;
+    overflow: visible;
+  }
+
+  .sidebar:hover {
+    overflow: visible;
+  }
 }

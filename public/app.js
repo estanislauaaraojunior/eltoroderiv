@@ -9,9 +9,11 @@ const state = {
   wins: 0,
   losses: 0,
   totalProfit: 0,
+  contractProfit: 0,
   totalScheduled: 0,
   balance: null,
   balanceCurrency: 'USD',
+  initialBalance: null,
 };
 
 // ── Elementos ─────────────────────────────────────────────────────────────────
@@ -40,17 +42,31 @@ const elResultsBody      = $('results-body');
 const elScheduleBody     = $('schedule-body');
 const elSelectAccount    = $('select-account');
 const elStatBalance      = $('stat-balance');
+const elStatContractProfit = $('stat-contract-profit');
 
 // Rastreia elementos de linha da tabela de agendamentos por signalId
 const scheduleRows = new Map();
 
 // Dados para persistência
-const _resultRows   = [];
-const _scheduleData = [];
-const _logEntries   = [];
+const _resultRows    = [];
+const _scheduleData  = [];
+const _logEntries    = [];
+const _blockedRows   = [];
+// Acumula lucro/prejuízo de rounds intermediários de Gale por signalId
+const _galeProfitMap = {};
+
+// Identificador de sessão — sobrevive recargas, mantém conexão Deriv viva no servidor
+const _sessionId = (() => {
+  const KEY = 'eltoro_session_id';
+  let id = localStorage.getItem(KEY);
+  if (!id) { id = crypto.randomUUID(); localStorage.setItem(KEY, id); }
+  return id;
+})();
 
 // Paginação – agendamentos
-const schedPagination = { page: 0, perPage: 30 };
+const schedPagination   = { page: 0, perPage: 30 };
+const resultsPagination = { page: 0, perPage: 30 };
+const blockedPagination = { page: 0, perPage: 30 };
 
 // Ordenação
 const schedSort   = { dir: null }; // null | 'asc' | 'desc'
@@ -189,6 +205,13 @@ function updateBalance(amount, currency) {
   if (elStatBalance) {
     elStatBalance.textContent = `$${parseFloat(amount).toFixed(2)} ${state.balanceCurrency}`;
   }
+  // Variação desde o início da sessão
+  const elDelta = $('stat-balance-delta');
+  if (elDelta && state.initialBalance !== null) {
+    const delta = parseFloat(amount) - state.initialBalance;
+    elDelta.textContent = `${delta >= 0 ? '+' : ''}$${Math.abs(delta).toFixed(2)}`;
+    elDelta.className = 'stat-value ' + (delta >= 0 ? 'green' : 'red');
+  }
 }
 
 // ── Estatísticas ──────────────────────────────────────────────────────────────
@@ -199,14 +222,21 @@ function updateStats() {
   const filtered = _getDateFilteredResults();
   const filteredWins   = filtered.filter(r => r.won).length;
   const filteredLosses = filtered.filter(r => !r.won).length;
-  const filteredProfit = filtered.reduce((acc, r) => acc + parseFloat(r.profit || 0), 0);
+  const filteredContractProfit = filtered.reduce((acc, r) => acc + parseFloat((r.contractProfit ?? r.profit) || 0), 0);
+  const filteredNetProfit = filtered.reduce((acc, r) => acc + parseFloat(r.profit || 0), 0);
 
   $('stat-wins').textContent   = filteredWins;
   $('stat-losses').textContent = filteredLosses;
 
+  const contractProfitEl = $('stat-contract-profit');
+  if (contractProfitEl) {
+    contractProfitEl.textContent = `${filteredContractProfit >= 0 ? '+' : ''}$${Math.abs(filteredContractProfit).toFixed(2)}`;
+    contractProfitEl.className = 'stat-value ' + (filteredContractProfit >= 0 ? 'green' : 'red');
+  }
+
   const profitEl = $('stat-profit');
-  profitEl.textContent = `${filteredProfit >= 0 ? '+' : '-'}$${Math.abs(filteredProfit).toFixed(2)}`;
-  profitEl.className = 'stat-value ' + (filteredProfit >= 0 ? 'green' : 'red');
+  profitEl.textContent = `${filteredNetProfit >= 0 ? '+' : '-'}$${Math.abs(filteredNetProfit).toFixed(2)}`;
+  profitEl.className = 'stat-value ' + (filteredNetProfit >= 0 ? 'green' : 'red');
   saveStats();
 }
 
@@ -284,6 +314,7 @@ function statusBadge(status) {
 function _buildScheduleRow(d) {
   const dirClass = d.direction === 'CALL' ? 'direction-call' : 'direction-put';
   const tr = document.createElement('tr');
+  tr.dataset.signalId = d.id;
   tr.innerHTML =
     `<td class="idx-cell">—</td>` +
     `<td>${escapeHtml(d.scheduledTime)}</td>` +
@@ -296,6 +327,18 @@ function _buildScheduleRow(d) {
     `<td class="sch-payout-cell">${escapeHtml(d.payout || '—')}</td>` +
     `<td><button class="btn btn-ghost btn-cancel-signal" data-id="${escapeHtml(d.id)}"${d.status !== 'waiting' ? ' disabled' : ''}>Cancelar</button></td>`;
   return tr;
+}
+
+function _setScheduleRowStatus(tr, status, galeLabel) {
+  if (!tr) return;
+  const statusCell = tr.querySelector('.sch-status-cell');
+  if (statusCell) statusCell.innerHTML = statusBadge(status);
+  if (galeLabel !== undefined) {
+    const galeCell = tr.querySelector('.sch-gale-cell');
+    if (galeCell) galeCell.textContent = galeLabel;
+  }
+  const btn = tr.querySelector('.btn-cancel-signal');
+  if (btn) btn.disabled = status !== 'waiting';
 }
 
 function _applyScheduleFilters(data) {
@@ -375,6 +418,20 @@ $('sch-next').addEventListener('click', () => {
   schedPagination.page++;
   renderScheduleTable();
 });
+$('res-prev').addEventListener('click', () => {
+  if (resultsPagination.page > 0) { resultsPagination.page--; renderResultsTable(); }
+});
+$('res-next').addEventListener('click', () => {
+  resultsPagination.page++;
+  renderResultsTable();
+});
+$('blk-prev').addEventListener('click', () => {
+  if (blockedPagination.page > 0) { blockedPagination.page--; renderBlockedTable(); }
+});
+$('blk-next').addEventListener('click', () => {
+  blockedPagination.page++;
+  renderBlockedTable();
+});
 
 function _formatScheduledTime(isoOrDate) {
   const d = new Date(isoOrDate);
@@ -453,18 +510,7 @@ function updateScheduleStatus(signalId, status, galeLabel) {
   }
 
   const tr = scheduleRows.get(signalId);
-  if (tr) {
-    const statusCell = tr.querySelector('.sch-status-cell');
-    if (statusCell) statusCell.innerHTML = statusBadge(status);
-    if (galeLabel !== undefined) {
-      const galeCell = tr.querySelector('.sch-gale-cell');
-      if (galeCell) galeCell.textContent = galeLabel;
-    }
-    if (status !== 'waiting') {
-      const btn = tr.querySelector('.btn-cancel-signal');
-      if (btn) btn.disabled = true;
-    }
-  }
+  if (tr) _setScheduleRowStatus(tr, status, galeLabel);
 
   saveSchedule();
 }
@@ -501,6 +547,7 @@ $('sort-res-time').addEventListener('click', () => {
   } else {
     resultsSort.dir = 'asc';  btn.textContent = '▲'; btn.className = 'sort-btn asc';
   }
+  resultsPagination.page = 0;
   renderResultsTable();
 });
 
@@ -603,7 +650,7 @@ function _onDropdownChange(e, wrapper, menu, col, tableKey, filtersMap) {
   }
   _updateFilterBtnLabel(wrapper);
   if (tableKey === 'schedule') { schedPagination.page = 0; renderScheduleTable(); }
-  else renderResultsTable();
+  else { resultsPagination.page = 0; renderResultsTable(); }
 }
 
 document.querySelectorAll('.th-dropdown-filter').forEach(wrapper => {
@@ -661,15 +708,21 @@ function renderResultsTable() {
   const dateFiltered = _getDateFilteredResults();
   const filtered = _applyResultsFilter(dateFiltered);
   const sorted   = _applyResultsSort(filtered);
+  const total    = sorted.length;
+  const perPage  = resultsPagination.perPage;
+  const totalPages = Math.max(1, Math.ceil(total / perPage));
+  resultsPagination.page = Math.min(resultsPagination.page, totalPages - 1);
+  const start = resultsPagination.page * perPage;
+  const slice = sorted.slice(start, start + perPage);
 
   elResultsBody.innerHTML = '';
-  sorted.forEach((r, i) => {
+  slice.forEach((r, i) => {
     const tr = document.createElement('tr');
     tr.className = r.won ? 'win' : 'loss';
     const profitClass = r.profit >= 0 ? 'profit-positive' : 'profit-negative';
     const dirClass    = r.direction === 'CALL' ? 'direction-call' : 'direction-put';
     tr.innerHTML =
-      `<td class="idx-cell">${r.signalIndex != null ? r.signalIndex : (i + 1)}</td>` +
+      `<td class="idx-cell">${r.signalIndex != null ? r.signalIndex : (start + i + 1)}</td>` +
       `<td>${escapeHtml(r.scheduledTime)}</td>` +
       `<td>${escapeHtml(r.rawSymbol)}</td>` +
       `<td class="${dirClass}">${r.direction === 'CALL' ? '⬆️ CALL' : '⬇️ PUT'}</td>` +
@@ -681,9 +734,22 @@ function renderResultsTable() {
       `<td>${escapeHtml(r.payout || '—')}</td>`;
     elResultsBody.appendChild(tr);
   });
+
+  const pagDiv   = $('results-pagination');
+  const pageInfo = $('res-page-info');
+  const btnPrev  = $('res-prev');
+  const btnNext  = $('res-next');
+  if (total > perPage) {
+    pagDiv?.classList.remove('hidden');
+    pageInfo.textContent = `Página ${resultsPagination.page + 1} de ${totalPages} (${total} itens)`;
+    btnPrev.disabled = resultsPagination.page === 0;
+    btnNext.disabled = resultsPagination.page >= totalPages - 1;
+  } else {
+    pagDiv?.classList.add('hidden');
+  }
 }
 
-function addResultRow({ signal, won, profit, stake, galeRound, payoutPct }) {
+function addResultRow({ signal, won, profit, contractProfit, stake, galeRound, payoutPct, contractId }) {
   const scheduledDate = new Date(signal.scheduledAt);
   const scheduledTime = _formatScheduledTime(scheduledDate);
 
@@ -699,7 +765,9 @@ function addResultRow({ signal, won, profit, stake, galeRound, payoutPct }) {
     galeRound,
     won,
     profit,
+    contractProfit: Number(contractProfit ?? profit) || 0,
     payout: payoutPct || '—',
+    contractId: contractId ? String(contractId) : null,
   });
 
   renderResultsTable();
@@ -714,6 +782,7 @@ function renderReportSummary() {
   const wins  = rows.filter(r => r.won).length;
   const winRate = total > 0 ? ((wins / total) * 100).toFixed(1) + '%' : '—';
   const profit  = rows.reduce((acc, r) => acc + parseFloat(r.profit || 0), 0);
+  const contractProfit = rows.reduce((acc, r) => acc + parseFloat((r.contractProfit ?? r.profit) || 0), 0);
 
   let maxWinStreak = 0, curWin = 0;
   let maxLossStreak = 0, curLoss = 0;
@@ -724,6 +793,7 @@ function renderReportSummary() {
 
   const repWinrate = $('rep-winrate');
   const repTotal   = $('rep-total');
+  const repContractProfit = $('rep-contract-profit');
   const repProfit  = $('rep-profit');
   const repStrW    = $('rep-streak-win');
   const repStrL    = $('rep-streak-loss');
@@ -735,6 +805,10 @@ function renderReportSummary() {
 
   if (repWinrate) repWinrate.textContent = winRate;
   if (repTotal)   repTotal.textContent   = total;
+  if (repContractProfit) {
+    repContractProfit.textContent = `${contractProfit >= 0 ? '+' : ''}$${Math.abs(contractProfit).toFixed(2)}`;
+    repContractProfit.className = 'stat-value ' + (contractProfit >= 0 ? 'green' : 'red');
+  }
   if (repProfit) {
     repProfit.textContent = `${profit >= 0 ? '+' : ''}$${Math.abs(profit).toFixed(2)}`;
     repProfit.className   = 'stat-value ' + (profit >= 0 ? 'green' : 'red');
@@ -791,6 +865,8 @@ const LS = {
   RESULTS:  'eltoro_results',
   SCHEDULE: 'eltoro_schedule',
   LOG:      'eltoro_log',
+  BLOCKED:  'eltoro_blocked',
+  GALE_MAP: 'eltoro_gale_map',
 };
 
 function saveForm() {
@@ -801,6 +877,7 @@ function saveForm() {
       accountId:   $('input-accountid')?.value || '',
       stake:       $('input-stake')?.value  || '1',
       maxGales:    $('input-maxgales')?.value || '1',
+      galeMultiplier: $('input-galemultiplier')?.value || '2',
       stopLoss:    $('input-stoploss')?.value  || '0',
       takeProfit:  $('input-takeprofit')?.value || '0',
       minPayout:   $('input-minpayout')?.value  || '0',
@@ -816,6 +893,7 @@ function saveStats() {
       wins:           state.wins,
       losses:         state.losses,
       totalProfit:    state.totalProfit,
+      contractProfit: state.contractProfit,
       totalScheduled: state.totalScheduled,
       statsDate:      _todayLocal(),
     }));
@@ -840,6 +918,110 @@ function saveLog() {
   } catch (_) {}
 }
 
+function saveBlocked() {
+  try {
+    localStorage.setItem(LS.BLOCKED, JSON.stringify(_blockedRows.slice(0, 200)));
+  } catch (_) {}
+}
+
+function saveGaleMap() {
+  try {
+    localStorage.setItem(LS.GALE_MAP, JSON.stringify(_galeProfitMap));
+  } catch (_) {}
+}
+
+// ── Operações Bloqueadas ─────────────────────────────────────────────────────────────────────────
+function renderBlockedTable() {
+  const elBody = $('blocked-body');
+  if (!elBody) return;
+  const total    = _blockedRows.length;
+  const perPage  = blockedPagination.perPage;
+  const totalPages = Math.max(1, Math.ceil(total / perPage));
+  blockedPagination.page = Math.min(blockedPagination.page, totalPages - 1);
+  const start = blockedPagination.page * perPage;
+  const slice = _blockedRows.slice(start, start + perPage);
+
+  elBody.innerHTML = '';
+  slice.forEach((b, i) => {
+    const tr = document.createElement('tr');
+    const dirClass   = b.direction === 'CALL' ? 'direction-call' : 'direction-put';
+    const votesClass = `votes-${b.votes}`;
+    const roundLabel = b.galeRound === 0 ? 'Entrada' : `G${b.galeRound}`;
+    const reasonsHtml = b.reasons && b.reasons.length
+      ? b.reasons.map(r => `<span>${escapeHtml(r)}</span>`).join('<br>')
+      : '<span style="color:var(--text-muted)">—</span>';
+    tr.innerHTML =
+      `<td class="idx-cell">${start + i + 1}</td>` +
+      `<td>${escapeHtml(b.scheduledTime)}</td>` +
+      `<td>${escapeHtml(b.rawSymbol)}</td>` +
+      `<td class="${dirClass}">${b.direction === 'CALL' ? '⬆️ CALL' : '⬇️ PUT'}</td>` +
+      `<td>${escapeHtml(roundLabel)}</td>` +
+      `<td><span class="votes-badge ${votesClass}">${b.votes}/3</span></td>` +
+      `<td class="blocked-reasons">${reasonsHtml}</td>`;
+    elBody.appendChild(tr);
+  });
+
+  const pagDiv   = $('blocked-pagination');
+  const pageInfo = $('blk-page-info');
+  const btnPrev  = $('blk-prev');
+  const btnNext  = $('blk-next');
+  if (total > perPage) {
+    pagDiv?.classList.remove('hidden');
+    pageInfo.textContent = `Página ${blockedPagination.page + 1} de ${totalPages} (${total} itens)`;
+    btnPrev.disabled = blockedPagination.page === 0;
+    btnNext.disabled = blockedPagination.page >= totalPages - 1;
+  } else {
+    pagDiv?.classList.add('hidden');
+  }
+}
+
+function addBlockedRow({ signal, galeRound, votes, reasons }) {
+  const scheduledDate = new Date(signal.scheduledAt);
+  const scheduledTime = _formatScheduledTime(scheduledDate);
+  _blockedRows.unshift({
+    scheduledTime,
+    scheduledAt:  scheduledDate.toISOString(),
+    rawSymbol:    signal.rawSymbol,
+    direction:    signal.direction,
+    galeRound:    galeRound ?? 0,
+    votes:        votes ?? 0,
+    reasons:      reasons ?? [],
+  });
+  blockedPagination.page = 0;
+  renderBlockedTable();
+  saveBlocked();
+}
+
+$('btn-export-blocked-csv')?.addEventListener('click', () => {
+  if (_blockedRows.length === 0) return addLog('⚠️ Sem operações bloqueadas para exportar.', 'warn');
+  const headers = ['#', 'Horário', 'Par', 'Direção', 'Rodada', 'Votos Contra', 'Motivos'];
+  const rows = [..._blockedRows].reverse().map((b, i) => [
+    i + 1,
+    b.scheduledTime,
+    b.rawSymbol,
+    b.direction,
+    b.galeRound === 0 ? 'Entrada' : `G${b.galeRound}`,
+    `${b.votes}/3`,
+    (b.reasons || []).join(' | '),
+  ]);
+  const csv = [headers, ...rows]
+    .map(row => row.map(v => `"${String(v).replace(/"/g, '""')}"`).join(','))
+    .join('\n');
+  const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `eltoro-bloqueadas-${new Date().toISOString().slice(0, 10)}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+  addLog('📥 CSV de bloqueadas exportado.', 'success');
+});
+
+$('btn-reconcile')?.addEventListener('click', () => {
+  addLog('🔍 Iniciando reconciliação — buscando contratos de hoje na Deriv...', 'muted');
+  socket.emit('account:reconcile');
+});
+
 function restoreState() {
   try {
     const form = JSON.parse(localStorage.getItem(LS.FORM) || 'null');
@@ -849,6 +1031,7 @@ function restoreState() {
       if (form.accountId)    $('input-accountid').value  = form.accountId;
       if (form.stake)        $('input-stake').value      = form.stake;
       if (form.maxGales)     $('input-maxgales').value   = form.maxGales;
+      if (form.galeMultiplier != null) $('input-galemultiplier').value = form.galeMultiplier;
       if (form.stopLoss != null)   $('input-stoploss').value    = form.stopLoss;
       if (form.takeProfit != null) $('input-takeprofit').value  = form.takeProfit;
       if (form.minPayout != null)  $('input-minpayout').value   = form.minPayout;
@@ -864,10 +1047,12 @@ function restoreState() {
       if (stats.statsDate && stats.statsDate !== today) {
         // Novo dia: zera as stats diárias
         state.wins = 0; state.losses = 0; state.totalProfit = 0; state.totalScheduled = 0;
+        state.contractProfit = 0;
       } else {
         state.wins           = stats.wins           || 0;
         state.losses         = stats.losses         || 0;
         state.totalProfit    = stats.totalProfit    || 0;
+        state.contractProfit = stats.contractProfit || 0;
         state.totalScheduled = stats.totalScheduled || 0;
       }
     }
@@ -897,17 +1082,28 @@ function restoreState() {
     const nowMs = Date.now();
     schedule.forEach(d => {
       let status = d.status;
-      if (status === 'executing') {
-        status = 'expired';
-      } else if (status === 'waiting') {
+      if (status === 'waiting') {
         const atMs = d.scheduledAtMs || (d.scheduledAt ? new Date(d.scheduledAt).getTime() : 0);
         status = atMs > nowMs ? 'waiting' : 'expired';
+      } else if (status === 'executing') {
+        status = 'executing';
       }
       const entry = { ...d, status };
       _scheduleData.push(entry);
       scheduleRows.set(d.id, _buildScheduleRow(entry));
-    });
-    renderScheduleTable();
+  });
+  renderScheduleTable();
+  } catch (_) {}
+
+  try {
+    const blocked = JSON.parse(localStorage.getItem(LS.BLOCKED) || '[]');
+    blocked.forEach(b => _blockedRows.push(b));
+    renderBlockedTable();
+  } catch (_) {}
+
+  try {
+    const galeMap = JSON.parse(localStorage.getItem(LS.GALE_MAP) || '{}');
+    if (galeMap && typeof galeMap === 'object') Object.assign(_galeProfitMap, galeMap);
   } catch (_) {}
 }
 
@@ -916,11 +1112,10 @@ function initDateFilter() {
   const fromEl = $('filter-from');
   const toEl   = $('filter-to');
 
-  // Inicia sem filtro — exibe tudo; usuário aplica quando quiser
-  fromEl.value = '';
-  toEl.value   = '';
-  _filterFrom  = null;
-  _filterTo    = null;
+  // Inicia com filtro de hoje — o usuário pode remover com "Tudo"
+  const t = _todayLocal();
+  fromEl.value = t;
+  toEl.value   = t;
 
   fromEl.addEventListener('change', _applyDateFilter);
   toEl.addEventListener('change',   _applyDateFilter);
@@ -937,6 +1132,9 @@ function initDateFilter() {
     toEl.value   = '';
     _applyDateFilter();
   });
+
+  // Aplica o filtro inicial (hoje)
+  _applyDateFilter();
 }
 
 // ── Formulário de Configuração ────────────────────────────────────────────────
@@ -947,6 +1145,7 @@ elFormConfig.addEventListener('submit', (e) => {
   const accountId = ($('input-accountid')?.value || '').trim() || undefined;
   const stake     = parseFloat($('input-stake').value) || 1;
   const maxGales  = parseInt($('input-maxgales').value, 10) || 0;
+  const galeMultiplier = parseFloat($('input-galemultiplier')?.value) || 2;
   const stopLoss  = parseFloat($('input-stoploss')?.value) || 0;
   const takeProfit = parseFloat($('input-takeprofit')?.value) || 0;
 
@@ -964,7 +1163,7 @@ elFormConfig.addEventListener('submit', (e) => {
   }
 
   addLog('🔌 Conectando à Deriv...', 'muted');
-  socket.emit('config:connect', { token, appId, accountId, stake, maxGales, stopLoss, takeProfit });
+  socket.emit('config:connect', { token, appId, accountId, stake, maxGales, galeMultiplier, stopLoss, takeProfit });
 });
 
 elBtnDisconnect.addEventListener('click', () => {
@@ -989,6 +1188,7 @@ elFormSignals.addEventListener('submit', (e) => {
   const date        = $('input-date').value;
   const stake       = parseFloat($('input-stake').value) || 1;
   const maxGales    = parseInt($('input-maxgales').value, 10) || 0;
+  const galeMultiplier = parseFloat($('input-galemultiplier')?.value) || 2;
 
   if (!signalsText) return addLog('⚠️ Cole os sinais antes de agendar.', 'warn');
 
@@ -998,7 +1198,7 @@ elFormSignals.addEventListener('submit', (e) => {
   const takeProfit = parseFloat($('input-takeprofit')?.value) || 0;
 
   const minPayout = parseFloat($('input-minpayout')?.value) || 0;
-  socket.emit('signals:submit', { signalsText, date: dateFormatted, stake, maxGales, stopLoss, takeProfit, minPayout });
+  socket.emit('signals:submit', { signalsText, date: dateFormatted, stake, maxGales, galeMultiplier, stopLoss, takeProfit, minPayout });
 });
 
 elBtnCancelAll.addEventListener('click', () => {
@@ -1017,7 +1217,7 @@ elScheduleBody.addEventListener('click', (e) => {
 });
 
 // ── Persistência de formulário ────────────────────────────────────────────
-['input-token', 'input-appid', 'input-accountid', 'input-stake', 'input-maxgales', 'input-stoploss', 'input-takeprofit', 'input-minpayout'].forEach(id => {
+['input-token', 'input-appid', 'input-accountid', 'input-stake', 'input-maxgales', 'input-galemultiplier', 'input-stoploss', 'input-takeprofit', 'input-minpayout'].forEach(id => {
   $(id)?.addEventListener('input', saveForm);
 });
 $('input-signals')?.addEventListener('input', saveForm);
@@ -1034,6 +1234,7 @@ socket.on('connection:status', (data) => {
     $('acc-type').textContent    = account.is_virtual ? '🎮 Demo' : '💵 Real';
     $('acc-balance').textContent = `$${parseFloat(balance.amount).toFixed(2)} ${balance.currency}`;
     updateBalance(balance.amount, balance.currency);
+    state.initialBalance = parseFloat(balance.amount);
     elSectionAccount.classList.remove('hidden');
 
     const others = (account.accountList || []).filter(a => a.loginid !== account.loginid);
@@ -1071,7 +1272,7 @@ socket.on('signals:reschedule:ack', (data) => {
 });
 
 socket.on('signals:parsed', (data) => {
-  state.totalScheduled += data.count;
+  if (data.source !== 'reschedule') state.totalScheduled += data.count;
   updateStats();
   addLog(data.message, 'info');
 });
@@ -1089,6 +1290,11 @@ socket.on('trade:executing', (data) => {
 
 socket.on('trade:bought', (data) => {
   addLog(data.message, 'info');
+  // Fallback visual: se a linha ainda não refletiu o executing, reforça o status
+  if (data.signal?.id) {
+    const galeLabel = data.galeRound > 0 ? `G${data.galeRound}` : undefined;
+    updateScheduleStatus(data.signal.id, 'executing', galeLabel);
+  }
 });
 
 socket.on('trade:update', (_data) => {});
@@ -1125,28 +1331,152 @@ socket.on('trade:result', (data) => {
   const type = data.won ? 'success' : 'error';
   addLog(data.message, type);
 
-  if (!data.isFinal) return;
+  // Acumula perdas de rounds intermediários do Gale (isFinal = false)
+  const sigId = data.signal?.id;
+  if (!data.isFinal) {
+    const currentProfit = Number(data.profit) || 0;
+    _galeProfitMap[sigId] = Number((Number(_galeProfitMap[sigId] || 0) + currentProfit).toFixed(2));
+    saveGaleMap();
+    return;
+  }
+
+  // Lucro líquido = resultado final + perdas acumuladas nos rounds anteriores do Gale
+  const currentProfit = Number(data.profit) || 0;
+  const previousGaleProfit = Number(_galeProfitMap[sigId] || 0);
+  const netProfit = Number((currentProfit + previousGaleProfit).toFixed(2));
+  delete _galeProfitMap[sigId];
+  saveGaleMap();
 
   playSound(data.won ? 'win' : 'loss');
 
   if (data.won) {
     state.wins++;
-    state.totalProfit += data.profit;
   } else {
     state.losses++;
-    state.totalProfit += data.profit;
   }
+  state.contractProfit += parseFloat(data.contractProfit ?? data.profit ?? 0);
+  state.totalProfit += netProfit;
 
   const schEntry = _scheduleData.find(d => d.id === data.signal.id);
   const payoutPct = schEntry?.payout || '—';
 
   removeScheduleRow(data.signal.id);
-  addResultRow({ ...data, payoutPct });
+  addResultRow({
+    ...data,
+    profit: netProfit,
+    contractProfit: Number(data.contractProfit ?? data.profit) || 0,
+    payoutPct,
+  });
   updateStats();
 });
 
 socket.on('trade:gale_limit', (data) => {
   addLog(data.message, 'warn');
+});
+
+socket.on('candle:analyzing', ({ signal, galeRound, label }) => {
+  const sym = signal?.symbol || '?';
+  addLog(`🔍 Analisando velas — ${sym} (${label})...`, 'muted');
+});
+
+socket.on('candle:analysis', (data) => {
+  const { signal, galeRound, proceed, votes, reasons, warnings, summary } = data;
+  if (proceed) {
+    addLog(summary, 'info');
+    if (warnings && warnings.length) {
+      addLog(`⚠️ Avisos de contexto: ${warnings.join(' | ')}`, 'warn');
+    }
+  } else {
+    addLog(summary, 'warn');
+    if (signal?.id) updateScheduleStatus(signal.id, 'rejected');
+    if (signal) addBlockedRow({ signal, galeRound: galeRound ?? 0, votes: votes ?? 0, reasons: reasons ?? [] });
+  }
+});
+
+socket.on('trade:result_lost', (data) => {
+  addLog(data.message, 'warn');
+  if (data.signal?.id && data.signal.id in _galeProfitMap) {
+    delete _galeProfitMap[data.signal.id];
+    saveGaleMap();
+  }
+});
+
+socket.on('account:reconcile:result', ({ transactions }) => {
+  if (!Array.isArray(transactions) || transactions.length === 0) {
+    addLog('🔍 Nenhum contrato concluído encontrado hoje na Deriv.', 'muted');
+    return;
+  }
+
+  const todayResults = _getDateFilteredResults();
+  const knownIds = new Set(todayResults.map(r => r.contractId).filter(Boolean));
+
+  // Fallback por minuto+direção para registros sem contractId (dados antigos)
+  const knownByKey = new Set(
+    todayResults.filter(r => !r.contractId).map(r => {
+      const ms  = r.scheduledAtMs || (r.scheduledAt ? new Date(r.scheduledAt).getTime() : 0);
+      const dir = r.direction === 'CALL' ? 'CALL' : 'PUT';
+      return `${dir}_${Math.floor(ms / 60000)}`;
+    })
+  );
+
+  const missing = transactions.filter(t => {
+    if (knownIds.has(String(t.contract_id))) return false;
+    const ms  = (t.purchase_time || 0) * 1000;
+    const dir = (t.contract_type || '').includes('CALL') ? 'CALL' : 'PUT';
+    return !knownByKey.has(`${dir}_${Math.floor(ms / 60000)}`);
+  });
+
+  if (missing.length === 0) {
+    addLog(`✅ Reconciliação: ${transactions.length} contrato(s) verificado(s) — nenhum ausente.`, 'success');
+    return;
+  }
+
+  addLog(`⚠️ ${missing.length} contrato(s) não registrado(s) encontrado(s). Adicionando...`, 'warn');
+
+  missing.forEach(t => {
+    const won       = parseFloat(t.profit) >= 0;
+    const profit    = parseFloat(t.profit);
+    const stake     = parseFloat(t.buy_price);
+    const parts     = (t.shortcode || '').split('_');
+    const rawSymbol = parts[1] || '?';
+    const dir       = (t.contract_type || '').includes('CALL') ? 'CALL' : 'PUT';
+    const purchaseDate = new Date((t.purchase_time || 0) * 1000);
+    const payoutPct = stake > 0 && t.payout != null
+      ? `${(((parseFloat(t.payout) / stake) - 1) * 100).toFixed(1)}%` : '—';
+
+    const fakeSignal = {
+      id:            `reconciled_${t.contract_id}`,
+      rawSymbol,
+      direction:     dir,
+      duration:      5,
+      duration_unit: 'm',
+      scheduledAt:   purchaseDate.toISOString(),
+      signalIndex:   null,
+    };
+
+    addResultRow({
+      signal: fakeSignal,
+      won,
+      profit,
+      stake,
+      galeRound: 0,
+      payoutPct,
+      contractId: String(t.contract_id),
+    });
+
+    if (won) state.wins++;
+    else state.losses++;
+    state.contractProfit += profit;
+    state.totalProfit += profit;
+
+    addLog(
+      `📋 [Reconciliado] #${t.contract_id} ${rawSymbol} ${dir} | ${won ? '✅ WIN' : '❌ LOSS'} ${profit >= 0 ? '+' : ''}$${Math.abs(profit).toFixed(2)}`,
+      won ? 'success' : 'error'
+    );
+  });
+
+  updateStats();
+  addLog(`✅ Reconciliação concluída. ${missing.length} contrato(s) adicionado(s).`, 'success');
 });
 
 socket.on('trades:cancelled', (data) => {
@@ -1165,12 +1495,19 @@ socket.on('trades:cancelled', (data) => {
       }
     }
   });
+  // Limpa mapa de gale — todos os sinais foram cancelados
+  for (const key of Object.keys(_galeProfitMap)) { delete _galeProfitMap[key]; }
+  saveGaleMap();
   saveSchedule();
 });
 
 socket.on('signal:cancelled', (data) => {
   updateScheduleStatus(data.signalId, 'cancelled');
   addLog('🛑 Sinal cancelado individualmente.', 'warn');
+  if (data.signalId in _galeProfitMap) {
+    delete _galeProfitMap[data.signalId];
+    saveGaleMap();
+  }
 });
 
 socket.on('error', (data) => {
@@ -1179,12 +1516,24 @@ socket.on('error', (data) => {
 
 socket.on('trade:error', (data) => {
   addLog(data.message, 'error');
-  if (data.signal?.id) updateScheduleStatus(data.signal.id, 'expired');
+  if (data.signal?.id) {
+    updateScheduleStatus(data.signal.id, 'expired');
+    if (data.signal.id in _galeProfitMap) {
+      delete _galeProfitMap[data.signal.id];
+      saveGaleMap();
+    }
+  }
 });
 
 socket.on('trade:skipped', (data) => {
   addLog(data.message, 'warn');
-  if (data.signal?.id) updateScheduleStatus(data.signal.id, 'rejected');
+  if (data.signal?.id) {
+    updateScheduleStatus(data.signal.id, 'rejected');
+    if (data.signal.id in _galeProfitMap) {
+      delete _galeProfitMap[data.signal.id];
+      saveGaleMap();
+    }
+  }
 });
 
 // ── Reset de Dados ───────────────────────────────────────────────────────────
@@ -1194,21 +1543,28 @@ $('btn-reset-data')?.addEventListener('click', () => {
   _resultRows.length = 0;
   _scheduleData.length = 0;
   _logEntries.length = 0;
+  _blockedRows.length = 0;
   scheduleRows.clear();
+  for (const key of Object.keys(_galeProfitMap)) { delete _galeProfitMap[key]; }
 
   state.wins = 0;
   state.losses = 0;
   state.totalProfit = 0;
+  state.contractProfit = 0;
   state.totalScheduled = 0;
 
   localStorage.removeItem(LS.RESULTS);
   localStorage.removeItem(LS.SCHEDULE);
   localStorage.removeItem(LS.LOG);
   localStorage.removeItem(LS.STATS);
+  localStorage.removeItem(LS.BLOCKED);
+  localStorage.removeItem(LS.GALE_MAP);
 
   elResultsBody.innerHTML = '';
   elScheduleBody.innerHTML = '';
   elLog.innerHTML = '';
+  const elBlockedBody = $('blocked-body');
+  if (elBlockedBody) elBlockedBody.innerHTML = '';
 
   renderScheduleTable();
   renderResultsTable();
@@ -1227,6 +1583,7 @@ updateStats();
 // Auto-reconexão: se há credenciais salvas, reconecta automaticamente ao (re)carregar a página.
 // O evento 'connect' do socket.io dispara assim que a conexão WebSocket é estabelecida.
 socket.on('connect', () => {
+  socket.emit('session:init', _sessionId);
   try {
     const form = JSON.parse(localStorage.getItem(LS.FORM) || 'null');
     if (form?.token && form?.appId) {
@@ -1237,6 +1594,7 @@ socket.on('connect', () => {
         accountId:   form.accountId  || undefined,
         stake:       parseFloat(form.stake)      || 1,
         maxGales:    parseInt(form.maxGales, 10) || 0,
+        galeMultiplier: parseFloat(form.galeMultiplier) || 2,
         stopLoss:    parseFloat(form.stopLoss)   || 0,
         takeProfit:  parseFloat(form.takeProfit) || 0,
         minPayout:   parseFloat(form.minPayout)  || 0,

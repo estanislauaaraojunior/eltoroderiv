@@ -14,18 +14,21 @@ class GaleManager {
   constructor() {
     this.baseStake = 1;
     this.maxGales = 1;
+    this.galeMultiplier = 2;
     // Map<signalId, { currentStake: number, galeCount: number }>
     this._state = new Map();
   }
 
   /**
    * Inicializa ou reinicializa o manager com novas configurações.
-   * @param {number} baseStake  Stake inicial (em USD/moeda da conta)
-   * @param {number} maxGales   Número máximo de gales (0 = sem gale)
+   * @param {number} baseStake       Stake inicial (em USD/moeda da conta)
+   * @param {number} maxGales         Número máximo de gales (0 = sem gale)
+   * @param {number} galeMultiplier   Multiplicador do stake a cada gale (padrão: 2)
    */
-  init(baseStake, maxGales) {
+  init(baseStake, maxGales, galeMultiplier) {
     this.baseStake = parseFloat(baseStake) || 1;
     this.maxGales = parseInt(maxGales, 10) || 0;
+    this.galeMultiplier = parseFloat(galeMultiplier) > 1 ? parseFloat(galeMultiplier) : 2;
     this._state.clear();
   }
 
@@ -75,8 +78,8 @@ class GaleManager {
       return { shouldGale: false, nextStake: this.baseStake, galeCount, limitReached: true };
     }
 
-    // Aplica gale: dobra o stake
-    const nextStake = parseFloat((state.currentStake * 2).toFixed(2));
+    // Aplica gale: multiplica o stake pelo fator configurado
+    const nextStake = parseFloat((state.currentStake * this.galeMultiplier).toFixed(2));
     const nextGaleCount = galeCount + 1;
     this._state.set(signalId, { currentStake: nextStake, galeCount: nextGaleCount });
 

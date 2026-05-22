@@ -12,6 +12,13 @@ const TelegramSignalSource = require('./src/telegramSignalSource');
 const { parseSignals } = require('./src/signalParser');
 
 const PORT = process.env.PORT || 3000;
+const DEFAULT_STRATEGY_OPTIONS = {
+  maxSessionExposure: 15,
+  maxLossStreak: 3,
+  maxTradesPerHour: 8,
+  edgeThreshold: 3,
+  maxGaleRounds: 1,
+};
 
 const app = express();
 const httpServer = createServer(app);
@@ -26,6 +33,7 @@ app.use(express.static(path.join(__dirname, 'public'), {
 }));
 
 const telegramSessions = new Map();
+const sessionStore     = new Map(); // clientSessionId → { derivClient, destroyTimer }
 
 function parseBaseDate(date) {
   if (!date) {
@@ -52,6 +60,7 @@ function scheduleSignalsForSession({
   date,
   stake,
   maxGales,
+  galeMultiplier,
   stopLoss,
   takeProfit,
   minPayout,
@@ -70,6 +79,10 @@ function scheduleSignalsForSession({
   if (maxGales != null) {
     const parsedMaxGales = parseInt(maxGales, 10);
     galeManager.maxGales = parsedMaxGales >= 0 ? parsedMaxGales : galeManager.maxGales;
+  }
+  if (galeMultiplier != null) {
+    const parsedMult = parseFloat(galeMultiplier);
+    if (parsedMult > 1) galeManager.galeMultiplier = parsedMult;
   }
   if (stopLoss != null) scheduler.slAmount = parseFloat(stopLoss) || 0;
   if (takeProfit != null) scheduler.tpAmount = parseFloat(takeProfit) || 0;
@@ -137,6 +150,7 @@ io.on('connection', (socket) => {
   const galeManager = new GaleManager();
   const scheduler = new Scheduler();
   let healthCheckTimer = null;
+  let clientSessionId  = null;
 
   /** Inicia o health check periódico da API (a cada 30s) */
   function startHealthCheck() {
@@ -149,8 +163,13 @@ io.on('connection', (socket) => {
           ok,
           message: ok ? 'API respondendo normalmente' : 'API não respondeu ao ping',
         });
+        if (!ok) {
+          // Ping falhou — reconecta silenciosamente para não deixar o WebSocket morto
+          try { await derivClient.reconnect(); } catch (_) {}
+        }
       } catch (err) {
         emit('api:health', { ok: false, message: err.message });
+        try { await derivClient.reconnect(); } catch (_) {}
       }
     }, 30_000);
   }
@@ -172,13 +191,58 @@ io.on('connection', (socket) => {
 
   // ─── Conectar à Deriv ─────────────────────────────────────────────────────
 
-  socket.on('config:connect', async ({ token, appId, accountId, stake, maxGales, stopLoss, takeProfit }) => {
+  socket.on('session:init', (sid) => {
+    if (!sid || typeof sid !== 'string' || sid.length > 128) return;
+    clientSessionId = sid;
+    const stored = sessionStore.get(sid);
+    if (stored?.derivClient?.isConnected) {
+      clearTimeout(stored.destroyTimer);
+      derivClient = stored.derivClient;
+      sessionStore.delete(sid);
+      console.log(`[~] Sessão restaurada: ${socket.id} (sid=${sid.slice(0, 8)}...)`);
+    }
+  });
+
+  socket.on('config:connect', async ({ token, appId, accountId, stake, maxGales, galeMultiplier, stopLoss, takeProfit }) => {
     try {
       if (!token || typeof token !== 'string' || token.trim().length === 0) {
         return emit('error', { message: 'Token da API é obrigatório.' });
       }
       if (!appId || typeof appId !== 'string' || appId.trim().length === 0) {
         return emit('error', { message: 'App ID é obrigatório.' });
+      }
+
+      // Sessão restaurada via session:init — reutiliza derivClient existente sem re-autenticar
+      if (derivClient?.isConnected) {
+        galeManager.init(stake || 1, maxGales || 0, galeMultiplier || 2);
+        scheduler.init(derivClient, galeManager, emit, stopLoss || 0, takeProfit || 0, DEFAULT_STRATEGY_OPTIONS);
+        startHealthCheck();
+        try {
+          const info    = derivClient.accountInfo;
+          const balance = await derivClient.getBalance();
+          emit('connection:status', {
+            connected: true,
+            account: {
+              loginid:     info.loginid,
+              fullname:    info.fullname || info.loginid,
+              email:       info.email    || '',
+              currency:    info.currency || balance.currency,
+              is_virtual:  info.is_virtual,
+              accountList: derivClient.getAccountList?.() || [],
+            },
+            balance: { amount: balance.balance, currency: balance.currency },
+            message: `✅ Reconectado como ${info.fullname || info.loginid} (${info.is_virtual ? 'Demo' : 'Real'})`,
+          });
+        } catch (_) {
+          const info = derivClient.accountInfo || {};
+          emit('connection:status', {
+            connected: true,
+            account: { loginid: info.loginid || '?', fullname: info.fullname || info.loginid || '?', email: '', currency: info.currency || 'USD', is_virtual: info.is_virtual || 0, accountList: [] },
+            balance: { amount: 0, currency: info.currency || 'USD' },
+            message: `✅ Reconectado (sessão restaurada)`,
+          });
+        }
+        return;
       }
 
       // Desconecta sessão anterior se existir
@@ -203,11 +267,19 @@ io.on('connection', (socket) => {
         accountInfo = derivClient.accountInfo;
 
         // Inicializa gale e scheduler
-        galeManager.init(stake || 1, maxGales || 0);
-        scheduler.init(derivClient, galeManager, emit, stopLoss || 0, takeProfit || 0);
-        const selAcc = accounts.find(a => a.account_id === selectedAccount.account_id);
-        const balanceAmount = parseFloat(selAcc?.balance ?? 0);
-        const currency = selAcc?.currency ?? 'USD';
+        galeManager.init(stake || 1, maxGales || 0, galeMultiplier || 2);
+        scheduler.init(derivClient, galeManager, emit, stopLoss || 0, takeProfit || 0, DEFAULT_STRATEGY_OPTIONS);
+        // Busca saldo em tempo real via WebSocket (evita valor de cache da API REST)
+        let balanceAmount, currency;
+        try {
+          const bal = await derivClient.getBalance();
+          balanceAmount = bal.balance;
+          currency      = bal.currency;
+        } catch (_) {
+          const selAcc = accounts.find(a => a.account_id === selectedAccount.account_id);
+          balanceAmount = parseFloat(selAcc?.balance ?? 0);
+          currency      = selAcc?.currency ?? 'USD';
+        }
 
         emit('connection:status', {
           connected: true,
@@ -239,8 +311,8 @@ io.on('connection', (socket) => {
         accountInfo = await derivClient.authorize(token.trim());
 
         // Inicializa gale e scheduler
-        galeManager.init(stake || 1, maxGales || 0);
-        scheduler.init(derivClient, galeManager, emit, stopLoss || 0, takeProfit || 0);
+        galeManager.init(stake || 1, maxGales || 0, galeMultiplier || 2);
+        scheduler.init(derivClient, galeManager, emit, stopLoss || 0, takeProfit || 0, DEFAULT_STRATEGY_OPTIONS);
         const balance = await derivClient.getBalance();
 
         emit('connection:status', {
@@ -321,13 +393,14 @@ io.on('connection', (socket) => {
 
   // ─── Submeter lista de sinais ─────────────────────────────────────────────
 
-  socket.on('signals:submit', ({ signalsText, date, stake, maxGales, stopLoss, takeProfit, minPayout }) => {
+  socket.on('signals:submit', ({ signalsText, date, stake, maxGales, galeMultiplier, stopLoss, takeProfit, minPayout }) => {
     try {
       scheduleFromPayload({
         signalsText,
         date,
         stake,
         maxGales,
+        galeMultiplier,
         stopLoss,
         takeProfit,
         minPayout,
@@ -401,6 +474,26 @@ io.on('connection', (socket) => {
     }
   });
 
+  // ─── Reconciliar: busca todos os contratos concluídos hoje na Deriv ────────
+
+  socket.on('account:reconcile', async () => {
+    try {
+      if (!derivClient?.isConnected) {
+        return emit('error', { message: 'Não conectado à Deriv.' });
+      }
+      const todayStart = new Date();
+      todayStart.setHours(0, 0, 0, 0);
+      const transactions = await derivClient.getProfitTable(
+        todayStart.getTime(),
+        Date.now()
+      );
+      emit('account:reconcile:result', { transactions });
+    } catch (err) {
+      console.error('[account:reconcile] Erro:', err.message);
+      emit('error', { message: `Erro ao buscar contratos: ${err.message}` });
+    }
+  });
+
   // ─── Desconectar da Deriv (solicitado pelo usuário) ─────────────────────
 
   socket.on('config:disconnect', () => {
@@ -425,8 +518,21 @@ io.on('connection', (socket) => {
     }
     scheduler.cancelAll();
     if (derivClient) {
-      derivClient.disconnect();
-      derivClient = null;
+      if (clientSessionId) {
+        // Grace period de 8s: mantém a conexão Deriv viva caso seja uma recarga de página
+        const dc  = derivClient;
+        const sid = clientSessionId;
+        const destroyTimer = setTimeout(() => {
+          dc.disconnect();
+          sessionStore.delete(sid);
+          console.log(`[-] Sessão expirada: sid=${sid.slice(0, 8)}...`);
+        }, 8000);
+        sessionStore.set(sid, { derivClient: dc, destroyTimer });
+        derivClient = null;
+      } else {
+        derivClient.disconnect();
+        derivClient = null;
+      }
     }
   });
 });

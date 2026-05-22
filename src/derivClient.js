@@ -291,26 +291,39 @@ class DerivClient {
    * @returns {Promise<void>}
    */
   async reconnect() {
-    this._stopPing();
-    if (this._ws) {
-      try { this._ws.terminate(); } catch (_) {}
-      this._ws = null;
-    }
-    this._authorized = false;
-    this._pending.clear();
+    // Mutex: se já há uma reconexão em andamento, todos os chamadores concorrentes
+    // aguardam o mesmo promise em vez de iniciar múltiplas reconexões simultâneas
+    // (evita o erro 1006 causado por vários trades tentando reconectar ao mesmo tempo).
+    if (this._reconnectPromise) return this._reconnectPromise;
 
-    if (this.accountInfo?._patToken) {
-      // Nova API: usa OTP armazenado
-      const { _patToken, _appId, loginid } = this.accountInfo;
-      const wsUrl = await this._getOTPUrl(_patToken, _appId, loginid);
-      await this._connectToUrl(wsUrl);
-      this._authorized = true;
-    } else if (this._legacyToken) {
-      // API Legada: reconecta e reautoriza
-      await this.connect();
-      await this.authorize(this._legacyToken);
-    } else {
-      throw new Error('Credenciais não disponíveis para reconexão automática');
+    this._reconnectPromise = (async () => {
+      this._stopPing();
+      if (this._ws) {
+        try { this._ws.terminate(); } catch (_) {}
+        this._ws = null;
+      }
+      this._authorized = false;
+      this._pending.clear();
+
+      if (this.accountInfo?._patToken) {
+        // Nova API: usa OTP armazenado
+        const { _patToken, _appId, loginid } = this.accountInfo;
+        const wsUrl = await this._getOTPUrl(_patToken, _appId, loginid);
+        await this._connectToUrl(wsUrl);
+        this._authorized = true;
+      } else if (this._legacyToken) {
+        // API Legada: reconecta e reautoriza
+        await this.connect();
+        await this.authorize(this._legacyToken);
+      } else {
+        throw new Error('Credenciais não disponíveis para reconexão automática');
+      }
+    })();
+
+    try {
+      return await this._reconnectPromise;
+    } finally {
+      this._reconnectPromise = null;
     }
   }
 
@@ -351,6 +364,29 @@ class DerivClient {
     const response = await this._send(request);
     if (response.error) throw new Error(response.error.message);
     return response.balance;
+  }
+
+  // ─── Histórico de Velas ─────────────────────────────────────────────────────
+
+  /**
+   * Busca velas (OHLC) de um símbolo via ticks_history.
+   * Retorna um array de { open, high, low, close, epoch }.
+   *
+   * @param {string} symbol      Símbolo Deriv (ex: 'frxUSDJPY')
+   * @param {number} granularity Tamanho da vela em segundos (900 = M15)
+   * @param {number} count       Quantidade de velas a buscar
+   * @returns {Promise<Array<{open: number, high: number, low: number, close: number, epoch: number}>>}
+   */
+  async getCandles(symbol, granularity = 900, count = 7) {
+    const response = await this._send({
+      ticks_history: symbol,
+      style: 'candles',
+      granularity,
+      count,
+      end: 'latest',
+    }, DEFAULT_TIMEOUT_MS);
+    if (response.error) throw new Error(response.error.message);
+    return response.candles;
   }
 
   // ─── Operações ──────────────────────────────────────────────────────────────
@@ -554,6 +590,22 @@ class DerivClient {
     }, DEFAULT_TIMEOUT_MS);
     if (response.error) throw new Error(response.error.message);
     return response.proposal_open_contract;
+  }
+
+  /**
+   * Busca o histórico de contratos concluídos (profit_table).
+   * @param {number} dateFrom  Timestamp em ms (início do período)
+   * @param {number} dateTo    Timestamp em ms (fim do período)
+   * @param {number} limit     Máximo de registros
+   * @returns {Promise<Array>} Lista de transações concluídas
+   */
+  async getProfitTable(dateFrom, dateTo, limit = 500) {
+    const req = { profit_table: 1, description: 1, sort: 'DESC', limit };
+    if (dateFrom) req.date_from = Math.floor(dateFrom / 1000);
+    if (dateTo)   req.date_to   = Math.floor(dateTo   / 1000);
+    const response = await this._send(req, 30_000);
+    if (response.error) throw new Error(response.error.message);
+    return response.profit_table?.transactions || [];
   }
 
   /**
