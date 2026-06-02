@@ -117,6 +117,21 @@ function _applyDateFilter() {
   renderResultsTable();
 }
 
+/** Define o filtro para o dia atual e reaplica os dados filtrados. */
+function _setTodayDateFilter() {
+  const t = _todayLocal();
+  $('filter-from').value = t;
+  $('filter-to').value   = t;
+  _applyDateFilter();
+}
+
+/** Remove qualquer restrição de data e reaplica os dados filtrados. */
+function _clearDateFilter() {
+  $('filter-from').value = '';
+  $('filter-to').value   = '';
+  _applyDateFilter();
+}
+
 // Inicializa campo de data com hoje (data local do navegador)
 $('input-date').value = _todayLocal();
 
@@ -683,7 +698,7 @@ function _applyResultsFilter(data) {
       `$${parseFloat(r.stake).toFixed(2)}`,
       r.galeRound > 0 ? `G${r.galeRound}` : '—',
       r.won ? 'WIN' : 'LOSS',
-      `${r.profit >= 0 ? '+' : ''}$${parseFloat(r.profit).toFixed(2)}`,
+      `${(Number(r.displayProfit ?? r.profit) || 0) >= 0 ? '+' : ''}$${Math.abs(Number(r.displayProfit ?? r.profit) || 0).toFixed(2)}`,
       r.payout || '—',
     ];
     for (const [col, allowed] of resultsFilters) {
@@ -719,7 +734,8 @@ function renderResultsTable() {
   slice.forEach((r, i) => {
     const tr = document.createElement('tr');
     tr.className = r.won ? 'win' : 'loss';
-    const profitClass = r.profit >= 0 ? 'profit-positive' : 'profit-negative';
+    const displayProfit = Number(r.displayProfit ?? r.profit) || 0;
+    const profitClass = displayProfit >= 0 ? 'profit-positive' : 'profit-negative';
     const dirClass    = r.direction === 'CALL' ? 'direction-call' : 'direction-put';
     tr.innerHTML =
       `<td class="idx-cell">${r.signalIndex != null ? r.signalIndex : (start + i + 1)}</td>` +
@@ -730,7 +746,7 @@ function renderResultsTable() {
       `<td>$${parseFloat(r.stake).toFixed(2)}</td>` +
       `<td>${r.galeRound > 0 ? 'G' + r.galeRound : '—'}</td>` +
       `<td>${r.won ? '✅ WIN' : '❌ LOSS'}</td>` +
-      `<td class="${profitClass}">${r.profit >= 0 ? '+' : ''}$${parseFloat(r.profit).toFixed(2)}</td>` +
+      `<td class="${profitClass}">${displayProfit >= 0 ? '+' : ''}$${Math.abs(displayProfit).toFixed(2)}</td>` +
       `<td>${escapeHtml(r.payout || '—')}</td>`;
     elResultsBody.appendChild(tr);
   });
@@ -749,9 +765,11 @@ function renderResultsTable() {
   }
 }
 
-function addResultRow({ signal, won, profit, contractProfit, stake, galeRound, payoutPct, contractId }) {
+function addResultRow({ signal, won, profit, displayProfit, contractProfit, stake, galeRound, payoutPct, contractId }) {
   const scheduledDate = new Date(signal.scheduledAt);
   const scheduledTime = _formatScheduledTime(scheduledDate);
+  const normalizedProfit = Number(profit) || 0;
+  const normalizedDisplayProfit = Number(displayProfit ?? profit) || 0;
 
   _resultRows.unshift({
     scheduledTime,
@@ -764,7 +782,8 @@ function addResultRow({ signal, won, profit, contractProfit, stake, galeRound, p
     stake,
     galeRound,
     won,
-    profit,
+    profit: normalizedProfit,
+    displayProfit: normalizedDisplayProfit,
     contractProfit: Number(contractProfit ?? profit) || 0,
     payout: payoutPct || '—',
     contractId: contractId ? String(contractId) : null,
@@ -832,7 +851,7 @@ $('btn-export-csv')?.addEventListener('click', () => {
     r.stake,
     r.galeRound > 0 ? `G${r.galeRound}` : '—',
     r.won ? 'WIN' : 'LOSS',
-    `${r.profit >= 0 ? '+' : ''}${parseFloat(r.profit).toFixed(2)}`,
+    `${(Number(r.displayProfit ?? r.profit) || 0) >= 0 ? '+' : ''}${Math.abs(Number(r.displayProfit ?? r.profit) || 0).toFixed(2)}`,
     r.payout || '—',
   ]);
   const csv = [headers, ...rows]
@@ -1113,24 +1132,17 @@ function initDateFilter() {
   const toEl   = $('filter-to');
 
   // Inicia com filtro de hoje — o usuário pode remover com "Tudo"
-  const t = _todayLocal();
-  fromEl.value = t;
-  toEl.value   = t;
+  _setTodayDateFilter();
 
   fromEl.addEventListener('change', _applyDateFilter);
   toEl.addEventListener('change',   _applyDateFilter);
 
   $('btn-filter-today')?.addEventListener('click', () => {
-    const t = _todayLocal();
-    fromEl.value = t;
-    toEl.value   = t;
-    _applyDateFilter();
+    _setTodayDateFilter();
   });
 
   $('btn-filter-all')?.addEventListener('click', () => {
-    fromEl.value = '';
-    toEl.value   = '';
-    _applyDateFilter();
+    _clearDateFilter();
   });
 
   // Aplica o filtro inicial (hoje)
@@ -1364,6 +1376,7 @@ socket.on('trade:result', (data) => {
   addResultRow({
     ...data,
     profit: netProfit,
+    displayProfit: netProfit,
     contractProfit: Number(data.contractProfit ?? data.profit) || 0,
     payoutPct,
   });
@@ -1458,6 +1471,7 @@ socket.on('account:reconcile:result', ({ transactions }) => {
       signal: fakeSignal,
       won,
       profit,
+      displayProfit: profit,
       stake,
       galeRound: 0,
       payoutPct,

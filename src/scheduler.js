@@ -118,20 +118,6 @@ class Scheduler {
       }
     }
 
-    const exposureWouldBe = parseFloat((this._sessionExposure + Math.abs(stake || 0)).toFixed(2));
-    if (this.maxSessionExposure > 0 && exposureWouldBe > this.maxSessionExposure) {
-      warnings.push(`Exposição da sessão excedida (${exposureWouldBe.toFixed(2)} > ${this.maxSessionExposure.toFixed(2)})`);
-    } else if (this.maxSessionExposure > 0) {
-      score += 1;
-    }
-
-    const recentTrades = this._sessionTradeTimes.filter(ts => Date.now() - ts <= 60 * 60 * 1000).length;
-    if (this.maxTradesPerHour > 0 && recentTrades >= this.maxTradesPerHour) {
-      blockers.push(`Limite de operações por hora atingido (${recentTrades}/${this.maxTradesPerHour})`);
-    } else if (this.maxTradesPerHour > 0) {
-      score += 1;
-    }
-
     if (galeRound > this.maxGaleRounds) {
       blockers.push(`Gale acima do limite configurado (${galeRound} > ${this.maxGaleRounds})`);
     }
