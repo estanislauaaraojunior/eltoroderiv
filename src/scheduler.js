@@ -10,6 +10,8 @@ class Scheduler {
     this._timers = new Map();
     // Set de chaves compostas já agendadas (evita duplicatas)
     this._scheduledKeys = new Set();
+    // Mapeia sinal para chave composta para poder cancelar/agendar novamente
+    this._scheduledKeyBySignalId = new Map();
     this._emit = null;
     this._derivClient = null;
     this._galeManager = null;
@@ -62,6 +64,7 @@ class Scheduler {
     }
     this._timers.clear();
     this._scheduledKeys.clear();
+    this._scheduledKeyBySignalId.clear();
     this._emit = null;
     this._derivClient = null;
     this._galeManager = null;
@@ -167,6 +170,7 @@ class Scheduler {
 
       signal.status = 'scheduled';
       this._scheduledKeys.add(slotKey);
+      this._scheduledKeyBySignalId.set(signal.id, slotKey);
       this._emit('trade:scheduled', {
         signal,
         message: `📅 Agendado: ${signal.rawSymbol} ${signal.direction} às ${this._formatTime(signal.scheduledAt)} (em ${this._formatDelay(delay)})`,
@@ -182,18 +186,35 @@ class Scheduler {
           if (!this._derivClient || !this._emit) return;
           const label = this._formatTime(signal.scheduledAt);
           try {
-            const ok = await this._derivClient.ping(5_000);
-            if (ok) {
-              this._emit('api:precheck:ok', {
-                signal: { ...signal, scheduledTimeLabel: label },
-              });
-            } else {
+                const ok = await this._derivClient.ping(5_000);
+            if (!ok) {
               this._emit('api:precheck:fail', {
                 signal: { ...signal, scheduledTimeLabel: label },
                 message: 'Sem resposta (ping timeout) — tentando reconectar...',
               });
               await this._tryReconnect(signal, label);
+              return;
             }
+
+            const marketCheck = await this._verifySignalAvailability(signal);
+            if (!marketCheck.ok) {
+              this._emit('api:precheck:fail', {
+                signal: { ...signal, scheduledTimeLabel: label },
+                message: marketCheck.reason,
+              });
+              if (this.cancelSignal(signal.id)) {
+                signal.status = 'rejected';
+                this._emit('trade:skipped', {
+                  signal,
+                  message: `🚫 Pré-check de mercado falhou: ${marketCheck.reason}`,
+                });
+              }
+              return;
+            }
+
+            this._emit('api:precheck:ok', {
+              signal: { ...signal, scheduledTimeLabel: label },
+            });
           } catch (err) {
             this._emit('api:precheck:fail', {
               signal: { ...signal, scheduledTimeLabel: label },
@@ -207,6 +228,7 @@ class Scheduler {
       const handle = setTimeout(() => {
         this._timers.delete(signal.id);
         this._scheduledKeys.delete(slotKey);
+        this._scheduledKeyBySignalId.delete(signal.id);
         this._executeTrade(signal, this._galeManager.getStake(signal.id), 0);
       }, delay);
 
@@ -222,6 +244,7 @@ class Scheduler {
     const pendingCount = this._timers.size;
     this._timers.clear();
     this._scheduledKeys.clear();
+    this._scheduledKeyBySignalId.clear();
     if (this._emit) {
       const msg = pendingCount > 0
         ? `🛑 ${pendingCount} agendamento(s) cancelado(s).`
@@ -240,6 +263,11 @@ class Scheduler {
     if (!handle) return false;
     clearTimeout(handle);
     this._timers.delete(signalId);
+    const slotKey = this._scheduledKeyBySignalId.get(signalId);
+    if (slotKey) {
+      this._scheduledKeys.delete(slotKey);
+      this._scheduledKeyBySignalId.delete(signalId);
+    }
     return true;
   }
 
@@ -247,7 +275,21 @@ class Scheduler {
   get pendingCount() {
     return this._timers.size;
   }
+  async _verifySignalAvailability(signal) {
+    if (!this._derivClient) {
+      return { ok: false, reason: 'Cliente Deriv não está inicializado.' };
+    }
 
+    const result = await this._derivClient.verifyContractAvailability({
+      symbol: signal.symbol,
+      contract_type: signal.contract_type,
+      duration: signal.duration,
+      duration_unit: signal.duration_unit,
+      rawSymbol: signal.rawSymbol,
+      currency: this._derivClient.accountInfo?.currency || 'USD',
+    });
+    return result;
+  }
   // ─── Execução ───────────────────────────────────────────────────────────────
 
   /**
@@ -314,6 +356,16 @@ class Scheduler {
         message: `🎯 Take Profit atingido! Lucro acumulado: +$${this._sessionProfit.toFixed(2)}. Agendamentos cancelados.`,
       });
       this.cancelAll();
+      return;
+    }
+
+    const marketCheck = await this._verifySignalAvailability(signal);
+    if (!marketCheck.ok) {
+      signal.status = 'rejected';
+      this._emit('trade:skipped', {
+        signal,
+        message: `🚫 ${marketCheck.reason}`,
+      });
       return;
     }
 

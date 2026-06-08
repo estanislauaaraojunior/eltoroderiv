@@ -388,7 +388,81 @@ class DerivClient {
     if (response.error) throw new Error(response.error.message);
     return response.candles;
   }
+  async getActiveSymbols() {
+    const response = await this._send({
+      active_symbols: 'brief',
+      product_type: 'basic',
+    }, DEFAULT_TIMEOUT_MS);
+    if (response.error) throw new Error(response.error.message);
+    return response.active_symbols || [];
+  }
 
+  async findActiveSymbol(symbol) {
+    const normalized = String(symbol).toUpperCase();
+    const activeSymbols = await this.getActiveSymbols();
+    return activeSymbols.find(item => String(item.symbol).toUpperCase() === normalized) || null;
+  }
+
+  _categorizeMarketError(message, signal) {
+    const text = String(message || '').toLowerCase();
+    if (text.includes('trading is not offered for this duration')) {
+      return `A duração ${signal.duration}${signal.duration_unit} não é oferecida para ${signal.rawSymbol}.`;
+    }
+    if (text.includes('is not offered') && text.includes('duration')) {
+      return `A duração ${signal.duration}${signal.duration_unit} não é oferecida para ${signal.rawSymbol}.`;
+    }
+    if (text.includes('market is closed') || text.includes('not open') || text.includes('exchange is closed') || text.includes('suspended') || text.includes('trading is not available')) {
+      return `O ativo ${signal.rawSymbol} está fora de horário ou suspenso.`;
+    }
+    if (text.includes('contract type') || text.includes('contract_type') || text.includes('contract not available') || text.includes('contract type is not available')) {
+      return `O contrato ${signal.contract_type} não está negociável para ${signal.rawSymbol} neste momento.`;
+    }
+    return `Não foi possível verificar disponibilidade de ${signal.rawSymbol}: ${message}`;
+  }
+
+  async verifyContractAvailability({ symbol, contract_type, duration, duration_unit, amount, currency, rawSymbol }) {
+    const params = {
+      symbol,
+      contract_type,
+      duration,
+      duration_unit,
+      amount: amount || 1,
+      currency: currency || this.accountInfo?.currency || 'USD',
+    };
+
+    let symbolInfo = null;
+    try {
+      symbolInfo = await this.findActiveSymbol(symbol);
+    } catch (_) {
+      symbolInfo = null;
+    }
+
+    if (symbolInfo) {
+      const suspended = symbolInfo.is_trading_suspended === 1 || symbolInfo.is_trading_suspended === true ||
+        symbolInfo.trading_suspended === 1 || symbolInfo.trading_suspended === true ||
+        symbolInfo.exchange_is_open === 0 || symbolInfo.exchange_is_open === false ||
+        symbolInfo.exchange_is_closed === 1 || symbolInfo.exchange_is_closed === true ||
+        symbolInfo.active === 0 || symbolInfo.active === false;
+      if (suspended) {
+        return {
+          ok: false,
+          reason: `O ativo ${rawSymbol || symbol} está suspenso ou fora do horário de negociação.`,
+          symbolInfo,
+        };
+      }
+    }
+
+    try {
+      await this.proposal(params);
+      return { ok: true, symbolInfo };
+    } catch (err) {
+      return {
+        ok: false,
+        reason: this._categorizeMarketError(err.message, { ...params, rawSymbol }),
+        symbolInfo,
+      };
+    }
+  }
   // ─── Operações ──────────────────────────────────────────────────────────────
 
   /**
